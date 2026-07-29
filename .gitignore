@@ -1,0 +1,17 @@
+# Lunar Cookies
+LunarCookies/bin/
+LunarCookies/obj/
+bin/
+obj/
+LunarCookies/switcher.dll
+Bridge/switcher.dll
+Bridge/session_helper_bytes.inc
+JavaHelper/out/
+publish/
+*.user
+*.log
+injector_debug.log
+_refs/
+cookies/
+mappings/
+.vs/

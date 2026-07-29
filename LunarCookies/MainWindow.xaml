@@ -1,0 +1,450 @@
+<Window
+    x:Class="LunarCookies.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:LunarCookies"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="using:LunarCookies.ViewModels"
+    mc:Ignorable="d"
+    Title="Lunar Cookies">
+
+  <Window.SystemBackdrop>
+    <MicaBackdrop Kind="Base"/>
+  </Window.SystemBackdrop>
+
+  <Grid x:Name="RootLayout"
+        Background="{ThemeResource AppBackgroundBrush}"
+        AllowDrop="True"
+        DragEnter="RootLayout_DragEnter"
+        DragOver="RootLayout_DragOver"
+        DragLeave="RootLayout_DragLeave"
+        Drop="RootLayout_Drop">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="48"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+
+    <Grid x:Name="AppTitleBar" Grid.Row="0" Background="Transparent">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+      <Image Width="30" Height="30" Margin="15,0,9,0"
+             Source="ms-appx:///Assets/LunarCookies.png"
+             VerticalAlignment="Center"/>
+      <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="1">
+        <TextBlock Text="Lunar Cookies" FontSize="14" FontWeight="SemiBold"/>
+        <TextBlock Text="Account switcher for supported Minecraft clients"
+                   FontSize="10" Foreground="{ThemeResource SecondaryTextBrush}"/>
+      </StackPanel>
+    </Grid>
+
+    <Grid Grid.Row="1" Margin="24,10,24,8" ColumnSpacing="10">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+
+      <Border Padding="11,6" CornerRadius="14" Background="{ThemeResource SubtleBackgroundBrush}">
+        <StackPanel Orientation="Horizontal" Spacing="7">
+          <FontIcon Glyph="&#xE701;" FontSize="12" Foreground="{StaticResource BrandGreenBrush}"/>
+          <TextBlock Text="{Binding ConnectionStatus}" FontSize="12" VerticalAlignment="Center"/>
+        </StackPanel>
+      </Border>
+
+      <Border Grid.Column="1" Padding="11,6" CornerRadius="14" Background="{ThemeResource SubtleBackgroundBrush}">
+        <StackPanel Orientation="Horizontal" Spacing="7">
+          <FontIcon Glyph="&#xE77B;" FontSize="12" Foreground="{StaticResource BrandGreenBrush}"/>
+          <TextBlock Text="{Binding SessionStatus}" FontSize="12" VerticalAlignment="Center"/>
+        </StackPanel>
+      </Border>
+
+      <ProgressRing Grid.Column="3" Width="22" Height="22"
+                    IsActive="{Binding IsBusy}" VerticalAlignment="Center"/>
+    </Grid>
+
+    <InfoBar x:Name="NoticeBar" Grid.Row="2" Margin="24,0,24,8"
+             IsOpen="False" IsClosable="True"/>
+
+    <NavigationView x:Name="MainNavigation"
+                    Grid.Row="3"
+                    PaneDisplayMode="Top"
+                    IsBackButtonVisible="Collapsed"
+                    IsSettingsVisible="False"
+                    IsTitleBarAutoPaddingEnabled="False"
+                    SelectionChanged="MainNavigation_SelectionChanged">
+      <NavigationView.MenuItems>
+        <NavigationViewItem x:Name="AccountsNavigationItem" Content="Accounts" Tag="accounts">
+          <NavigationViewItem.Icon>
+            <SymbolIcon Symbol="Contact"/>
+          </NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Injection" Tag="injection">
+          <NavigationViewItem.Icon>
+            <FontIcon Glyph="&#xE90F;"/>
+          </NavigationViewItem.Icon>
+        </NavigationViewItem>
+        <NavigationViewItem Content="Settings" Tag="settings">
+          <NavigationViewItem.Icon>
+            <SymbolIcon Symbol="Setting"/>
+          </NavigationViewItem.Icon>
+        </NavigationViewItem>
+      </NavigationView.MenuItems>
+
+      <Grid>
+        <Grid x:Name="AccountsPage" Margin="16,12,16,16">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+
+          <Grid Margin="4,0,4,14">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Spacing="3">
+              <TextBlock Text="Your accounts" Style="{StaticResource TitleTextBlockStyle}"/>
+              <TextBlock Text="Select an account, then use the controls below."
+                         Foreground="{ThemeResource SecondaryTextBrush}"/>
+            </StackPanel>
+            <Button Grid.Column="1" Margin="0,0,8,0" Style="{StaticResource CardButtonStyle}"
+                    IsEnabled="{Binding IsNotBusy}" Click="ImportFile_Click">
+              <StackPanel Orientation="Horizontal" Spacing="7">
+                <FontIcon Glyph="&#xE8E5;" FontSize="14"/>
+                <TextBlock Text="Import file"/>
+              </StackPanel>
+            </Button>
+            <Button Grid.Column="2" Style="{StaticResource CardButtonStyle}"
+                    IsEnabled="{Binding IsNotBusy}" Click="ImportText_Click">
+              <StackPanel Orientation="Horizontal" Spacing="7">
+                <FontIcon Glyph="&#xE77F;" FontSize="14"/>
+                <TextBlock Text="Paste / import"/>
+              </StackPanel>
+            </Button>
+          </Grid>
+
+          <Grid Grid.Row="1">
+            <GridView x:Name="AccountGrid"
+                      ItemsSource="{Binding Accounts}"
+                      SelectedItem="{Binding SelectedAccount, Mode=TwoWay}"
+                      SelectionMode="Single"
+                      IsItemClickEnabled="True"
+                      IsEnabled="{Binding IsNotBusy}"
+                      Loaded="AccountGrid_Loaded"
+                      SizeChanged="AccountGrid_SizeChanged"
+                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                      ScrollViewer.VerticalScrollBarVisibility="Auto">
+              <GridView.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <ItemsWrapGrid Orientation="Horizontal" ItemHeight="148"/>
+                </ItemsPanelTemplate>
+              </GridView.ItemsPanel>
+              <GridView.ItemContainerStyle>
+                <Style TargetType="GridViewItem">
+                  <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                  <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+                  <Setter Property="Margin" Value="4"/>
+                  <Setter Property="Padding" Value="0"/>
+                  <Setter Property="CornerRadius" Value="10"/>
+                  <Setter Property="UseSystemFocusVisuals" Value="True"/>
+                </Style>
+              </GridView.ItemContainerStyle>
+              <GridView.ItemTemplate>
+                <DataTemplate x:DataType="vm:AccountCardViewModel">
+                  <Grid ToolTipService.ToolTip="{x:Bind UuidLabel}">
+                    <Border CornerRadius="11"
+                            BorderBrush="{StaticResource BrandGreenBrush}"
+                            BorderThickness="3"
+                            Visibility="{x:Bind SelectionVisibility, Mode=OneWay}"/>
+                    <Border Margin="4" Padding="14" CornerRadius="8"
+                            Background="{ThemeResource CardBackgroundBrush}"
+                            BorderBrush="{ThemeResource CardBorderBrush}"
+                            BorderThickness="1">
+                      <Grid>
+                      <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                      </Grid.RowDefinitions>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                      </Grid.ColumnDefinitions>
+
+                      <Border Width="42" Height="42" CornerRadius="21"
+                              Background="{StaticResource BrandGreenBrush}">
+                        <TextBlock Text="{x:Bind Initials}" HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" FontWeight="SemiBold"
+                                   Foreground="White" FontSize="14"/>
+                      </Border>
+
+                      <StackPanel Grid.Column="1" Margin="12,1,0,0" Spacing="3">
+                        <TextBlock Text="{x:Bind Name}" FontSize="16" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"/>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <Border Padding="7,2" CornerRadius="8"
+                                  Background="{ThemeResource SubtleBackgroundBrush}">
+                            <TextBlock Text="{x:Bind SourceLabel}" FontSize="10"/>
+                          </Border>
+                          <Border x:Name="CurrentBadge" Padding="7,2" CornerRadius="8"
+                                  Background="{StaticResource BrandGreenBrush}"
+                                  Visibility="{x:Bind CurrentVisibility, Mode=OneWay}">
+                            <TextBlock Text="CURRENT" FontSize="10" Foreground="White"/>
+                          </Border>
+                        </StackPanel>
+                      </StackPanel>
+
+                      <TextBlock Grid.Row="2" Grid.ColumnSpan="2"
+                                 Text="{x:Bind LastUsedLabel}"
+                                 Foreground="{ThemeResource SecondaryTextBrush}" FontSize="12"/>
+                      </Grid>
+                    </Border>
+                    <Border HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Margin="0,9,9,0" Width="24" Height="24" CornerRadius="12"
+                            Background="{StaticResource BrandGreenBrush}"
+                            Visibility="{x:Bind SelectionVisibility, Mode=OneWay}">
+                      <FontIcon Glyph="&#xE73E;" FontSize="12" Foreground="White"/>
+                    </Border>
+                  </Grid>
+                </DataTemplate>
+              </GridView.ItemTemplate>
+            </GridView>
+
+            <StackPanel x:Name="EmptyAccountsState" HorizontalAlignment="Center"
+                        VerticalAlignment="Center" Spacing="8">
+              <FontIcon Glyph="&#xE77B;" FontSize="42"
+                        Foreground="{ThemeResource SecondaryTextBrush}"/>
+              <TextBlock Text="No accounts yet" FontSize="20" FontWeight="SemiBold"
+                         HorizontalAlignment="Center"/>
+              <TextBlock Text="Import a Localts token or Microsoft cookie file to get started."
+                         Foreground="{ThemeResource SecondaryTextBrush}"
+                         TextAlignment="Center" MaxWidth="420"/>
+            </StackPanel>
+          </Grid>
+
+          <Border Grid.Row="2" Margin="4,14,4,0" Padding="12"
+                  Background="{ThemeResource CardBackgroundBrush}"
+                  BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1"
+                  CornerRadius="10">
+            <Grid ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <Button Style="{StaticResource BrandButtonStyle}"
+                      IsEnabled="{Binding CanUseAccount}" Click="UseAccount_Click">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <FontIcon Glyph="&#xE8FB;" FontSize="14"/>
+                  <TextBlock Text="Use account"/>
+                </StackPanel>
+              </Button>
+              <Button Grid.Column="1" Style="{StaticResource CardButtonStyle}"
+                      IsEnabled="{Binding CanRestore}" Click="Restore_Click"
+                      Content="Restore launch account"/>
+              <Button Grid.Column="3" Style="{StaticResource CardButtonStyle}"
+                      IsEnabled="{Binding CanDeleteAccount}" Click="Delete_Click"
+                      Foreground="{ThemeResource SystemFillColorCriticalBrush}">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <FontIcon Glyph="&#xE74D;" FontSize="14"/>
+                  <TextBlock Text="Delete"/>
+                </StackPanel>
+              </Button>
+            </Grid>
+          </Border>
+        </Grid>
+
+        <Grid x:Name="InjectionPage" Margin="20,12,20,20" Visibility="Collapsed">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+
+          <StackPanel Spacing="3" Margin="0,0,0,14">
+            <TextBlock Text="Injection and diagnostics" Style="{StaticResource TitleTextBlockStyle}"/>
+            <TextBlock Text="Connect the PID-verified control bridge and inspect the current Minecraft session."
+                       Foreground="{ThemeResource SecondaryTextBrush}"/>
+          </StackPanel>
+
+          <Grid Grid.Row="1" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Padding="18" CornerRadius="10"
+                    Background="{ThemeResource CardBackgroundBrush}"
+                    BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+              <StackPanel Spacing="10">
+                <TextBlock Text="Bridge" FontWeight="SemiBold" FontSize="16"/>
+                <TextBlock Text="{Binding ConnectionStatus}" FontSize="20"
+                           TextWrapping="Wrap" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding ProcessStatus}" TextWrapping="Wrap"
+                           Foreground="{ThemeResource SecondaryTextBrush}"/>
+                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
+                  <Button Content="Inject / connect" Style="{StaticResource BrandButtonStyle}"
+                          IsEnabled="{Binding IsNotBusy}" Click="Inject_Click"/>
+                  <Button Content="Refresh session" Style="{StaticResource CardButtonStyle}"
+                          IsEnabled="{Binding CanRestore}" Click="RefreshSession_Click"/>
+                  <Button Content="Disconnect" Style="{StaticResource CardButtonStyle}"
+                          IsEnabled="{Binding CanDisconnect}" Click="Disconnect_Click"/>
+                </StackPanel>
+                <TextBlock Text="Disconnecting closes this app's control connection; it does not unload the injected DLL."
+                           FontSize="11" TextWrapping="Wrap"
+                           Foreground="{ThemeResource SecondaryTextBrush}"/>
+              </StackPanel>
+            </Border>
+
+            <Border Grid.Column="1" Padding="18" CornerRadius="10"
+                    Background="{ThemeResource CardBackgroundBrush}"
+                    BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+              <Grid>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="Current session" FontWeight="SemiBold" FontSize="16"/>
+                <Grid Grid.Row="1" Margin="0,14,0,0" RowSpacing="10" ColumnSpacing="14">
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Text="Username" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                  <TextBlock Grid.Column="1" Text="{Binding CurrentUsername}" FontWeight="SemiBold"/>
+                  <TextBlock Grid.Row="1" Text="UUID" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                  <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding CurrentUuid}"
+                             TextTrimming="CharacterEllipsis"/>
+                  <TextBlock Grid.Row="2" Text="Location" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                  <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding WorldStatus}"/>
+                </Grid>
+              </Grid>
+            </Border>
+          </Grid>
+
+          <Border Grid.Row="2" Margin="0,12,0,0" Padding="14" CornerRadius="10"
+                  Background="{ThemeResource CardBackgroundBrush}"
+                  BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <Grid Margin="2,0,2,8">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Diagnostic log" FontWeight="SemiBold" FontSize="16"
+                           VerticalAlignment="Center"/>
+                <Button Grid.Column="1" Content="Copy log" Margin="0,0,8,0"
+                        Style="{StaticResource CardButtonStyle}" Click="CopyLog_Click"/>
+                <Button Grid.Column="2" Content="Clear"
+                        Style="{StaticResource CardButtonStyle}" Click="ClearLog_Click"/>
+              </Grid>
+              <TextBox x:Name="LogBox" Grid.Row="1"
+                       Text="{Binding LogText, Mode=OneWay}"
+                       IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                       FontFamily="Consolas" FontSize="11"
+                       ScrollViewer.VerticalScrollBarVisibility="Auto"
+                       Background="{ThemeResource AppBackgroundBrush}"
+                       BorderThickness="0" Padding="10"/>
+            </Grid>
+          </Border>
+        </Grid>
+
+        <Grid x:Name="SettingsPage" Margin="20,12,20,20" Visibility="Collapsed">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+          <StackPanel Spacing="3" Margin="0,0,0,14">
+            <TextBlock Text="Settings" Style="{StaticResource TitleTextBlockStyle}"/>
+            <TextBlock Text="Choose how Lunar Cookies behaves in the background."
+                       Foreground="{ThemeResource SecondaryTextBrush}"/>
+          </StackPanel>
+
+          <Border Grid.Row="1" Padding="20" CornerRadius="10"
+                  Background="{ThemeResource CardBackgroundBrush}"
+                  BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+            <StackPanel Spacing="20">
+              <Grid ColumnSpacing="20">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="4">
+                  <TextBlock Text="Minimize to notification area"
+                             FontSize="16" FontWeight="SemiBold"/>
+                  <TextBlock Text="Clicking Minimize hides the window to the tray. Double-click the tray icon to restore it."
+                             TextWrapping="Wrap" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                </StackPanel>
+                <ToggleSwitch Grid.Column="1" x:Name="MinimizeToTrayToggle"
+                              IsOn="{Binding MinimizeToTray, Mode=TwoWay}"
+                              Toggled="SettingsToggle_Toggled"/>
+              </Grid>
+
+              <Rectangle Height="1" Fill="{ThemeResource CardBorderBrush}"/>
+
+              <Grid ColumnSpacing="20">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="4">
+                  <TextBlock Text="Exit when Minecraft closes"
+                             FontSize="16" FontWeight="SemiBold"/>
+                  <TextBlock Text="After a supported Minecraft client has been detected, close Lunar Cookies automatically when the game process exits."
+                             TextWrapping="Wrap" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                </StackPanel>
+                <ToggleSwitch Grid.Column="1" x:Name="ExitWithMinecraftToggle"
+                              IsOn="{Binding ExitWhenMinecraftCloses, Mode=TwoWay}"
+                              Toggled="SettingsToggle_Toggled"/>
+              </Grid>
+            </StackPanel>
+          </Border>
+        </Grid>
+      </Grid>
+    </NavigationView>
+
+    <Border x:Name="DropOverlay"
+            Grid.RowSpan="4"
+            Margin="12"
+            CornerRadius="14"
+            BorderBrush="{StaticResource BrandGreenBrush}"
+            BorderThickness="3"
+            Background="{ThemeResource AppBackgroundBrush}"
+            Opacity="0.96"
+            Visibility="Collapsed"
+            IsHitTestVisible="False">
+      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
+        <Border Width="72" Height="72" CornerRadius="36"
+                Background="{StaticResource BrandGreenBrush}">
+          <FontIcon Glyph="&#xE8E5;" FontSize="30" Foreground="White"
+                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Border>
+        <TextBlock Text="Drop account files to import"
+                   FontSize="24" FontWeight="SemiBold"
+                   HorizontalAlignment="Center"/>
+        <TextBlock Text="Localts tokens, Netscape cookies, and cookie text files are supported."
+                   Foreground="{ThemeResource SecondaryTextBrush}"
+                   TextAlignment="Center"/>
+      </StackPanel>
+    </Border>
+  </Grid>
+</Window>

@@ -1,0 +1,51 @@
+<Application
+    x:Class="LunarCookies.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls"/>
+      </ResourceDictionary.MergedDictionaries>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="AppBackgroundBrush" Color="#F5F7F8"/>
+          <SolidColorBrush x:Key="CardBackgroundBrush" Color="#FFFFFF"/>
+          <SolidColorBrush x:Key="CardBorderBrush" Color="#D8DEE3"/>
+          <SolidColorBrush x:Key="SecondaryTextBrush" Color="#5C6975"/>
+          <SolidColorBrush x:Key="SubtleBackgroundBrush" Color="#EAF0ED"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="AppBackgroundBrush" Color="#0F1419"/>
+          <SolidColorBrush x:Key="CardBackgroundBrush" Color="#192129"/>
+          <SolidColorBrush x:Key="CardBorderBrush" Color="#2B3742"/>
+          <SolidColorBrush x:Key="SecondaryTextBrush" Color="#9AA9B7"/>
+          <SolidColorBrush x:Key="SubtleBackgroundBrush" Color="#202D2A"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="HighContrast">
+          <SolidColorBrush x:Key="AppBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+          <SolidColorBrush x:Key="CardBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+          <SolidColorBrush x:Key="CardBorderBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+          <SolidColorBrush x:Key="SecondaryTextBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+          <SolidColorBrush x:Key="SubtleBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+
+      <Color x:Key="BrandGreenColor">#3D8B6E</Color>
+      <SolidColorBrush x:Key="BrandGreenBrush" Color="{StaticResource BrandGreenColor}"/>
+      <SolidColorBrush x:Key="BrandGreenSubtleBrush" Color="#243D34"/>
+
+      <Style x:Key="BrandButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
+        <Setter Property="Background" Value="{StaticResource BrandGreenBrush}"/>
+        <Setter Property="Foreground" Value="White"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Padding" Value="16,9"/>
+      </Style>
+
+      <Style x:Key="CardButtonStyle" TargetType="Button">
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Padding" Value="14,8"/>
+      </Style>
+    </ResourceDictionary>
+  </Application.Resources>
+</Application>

@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+
+      - name: Run parser tests
+        run: dotnet run --project LunarCookies.Tests/LunarCookies.Tests.csproj --configuration Release
+
+      - name: Build Windows application
+        run: dotnet build LunarCookies/LunarCookies.csproj --configuration Release -p:Platform=x64
+
+      - name: Run Java compatibility tests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force JavaHelper/out | Out-Null
+          javac -source 1.8 -target 1.8 -d JavaHelper/out JavaHelper/SessionSwitcher.java JavaHelper/SessionSwitcherCompatibilityTest.java
+          java -cp JavaHelper/out com.lunarcookies.SessionSwitcherCompatibilityTest
