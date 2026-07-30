@@ -4,6 +4,12 @@ A portable WinUI 3 account switcher for multiple Minecraft Java clients. It
 supports Localts refresh tokens (`M.C…`) and Netscape or cookie-header
 Microsoft session cookies.
 
+## Showcase
+
+[![Lunar Cookies account selection screen](docs/showcase.png)](https://youtu.be/t8smWCKkc6M)
+
+Watch the [Lunar Cookies showcase video](https://youtu.be/t8smWCKkc6M).
+
 ## Client compatibility
 
 The injected helper resolves the Minecraft singleton and session/user object by
