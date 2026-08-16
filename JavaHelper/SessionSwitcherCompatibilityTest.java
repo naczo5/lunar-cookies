@@ -80,6 +80,15 @@ public final class SessionSwitcherCompatibilityTest {
         require(!modern.xuid.isPresent() && !modern.clientId.isPresent(),
                 "modern optional identifiers");
 
+        String invalidHost = SessionSwitcher.joinServer(" ", 25565);
+        require(invalidHost.startsWith("error:invalid_address"), "blank host rejected");
+        String invalidPort = SessionSwitcher.joinServer("localhost", 0);
+        require(invalidPort.startsWith("error:invalid_address"), "port 0 rejected");
+        String missingClient = SessionSwitcher.joinServer("localhost", 25565);
+        require(missingClient.startsWith("error:"), "join without Minecraft fails closed");
+        require(!missingClient.startsWith("error:invalid_address"),
+                "uninitialized client is not reported as a bad address");
+
         System.out.println("SessionSwitcher compatibility tests passed.");
     }
 

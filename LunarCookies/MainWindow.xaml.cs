@@ -21,7 +21,9 @@ public sealed partial class MainWindow : Window
     private sealed record ImportResult(bool Success, string Detail);
 
     private readonly AccountStore _store = new();
+    private readonly ServerStore _servers = new();
     private readonly AppSettingsStore _settingsStore = new();
+    private readonly LunarAccountManager _lunarAccounts = new();
     private readonly InjectorService _injector = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly DispatcherTimer _minecraftMonitor = new() { Interval = TimeSpan.FromSeconds(3) };
@@ -34,6 +36,7 @@ public sealed partial class MainWindow : Window
     private bool _isInTray;
     private bool _trayHintShown;
     private bool _isShuttingDown;
+    private bool _settingsReady;
     private int _missingMinecraftChecks;
     private int? _trackedMinecraftPid;
 
@@ -46,15 +49,18 @@ public sealed partial class MainWindow : Window
         RootLayout.DataContext = ViewModel;
         ViewModel.MinimizeToTray = _settings.MinimizeToTray;
         ViewModel.ExitWhenMinecraftCloses = _settings.ExitWhenMinecraftCloses;
+        ViewModel.PopulateLunarAccountManager = _settings.PopulateLunarAccountManager;
         ConfigureWindow();
         ConfigureTrayIcon();
 
         MainNavigation.SelectedItem = AccountsNavigationItem;
         ReloadAccounts();
+        ReloadServers();
         _lunarWasRunning = RefreshProcessStatus();
         _minecraftMonitor.Tick += MinecraftMonitor_Tick;
         _minecraftMonitor.Start();
-        Log("Ready. Launch Minecraft, then select an account or open Injection.");
+        Log("Ready. Launch Minecraft, then select an account or open Servers.");
+        _settingsReady = true;
         Closed += OnClosed;
     }
 
@@ -95,6 +101,14 @@ public sealed partial class MainWindow : Window
         EmptyAccountsState.Visibility = ViewModel.HasAccounts ? Visibility.Collapsed : Visibility.Visible;
         AccountGrid.Visibility = ViewModel.HasAccounts ? Visibility.Visible : Visibility.Collapsed;
         ResizeAccountCards(AccountGrid.ActualWidth);
+    }
+
+    private void ReloadServers(string? selectId = null)
+    {
+        string? selectedId = selectId ?? ViewModel.SelectedServer?.Id;
+        ViewModel.ReplaceServers(_servers.Servers, selectedId);
+        EmptyServersState.Visibility = ViewModel.HasServers ? Visibility.Collapsed : Visibility.Visible;
+        ServerList.Visibility = ViewModel.HasServers ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private bool RefreshProcessStatus(bool updateTrackedProcess = true)
@@ -141,13 +155,17 @@ public sealed partial class MainWindow : Window
     {
         string? tag = (args.SelectedItemContainer as NavigationViewItem)?.Tag?.ToString();
         bool accounts = tag == "accounts" || string.IsNullOrEmpty(tag);
+        bool servers = tag == "servers";
         bool injection = tag == "injection";
         AccountsPage.Visibility = accounts ? Visibility.Visible : Visibility.Collapsed;
+        ServersPage.Visibility = servers ? Visibility.Visible : Visibility.Collapsed;
         InjectionPage.Visibility = injection ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility = tag == "settings" ? Visibility.Visible : Visibility.Collapsed;
 
         if (injection)
             RefreshProcessStatus();
+        if (servers && ViewModel.HasServers)
+            _ = PingAllServersAsync();
     }
 
     private void AccountGrid_Loaded(object sender, RoutedEventArgs e)
@@ -300,8 +318,9 @@ public sealed partial class MainWindow : Window
             _currentSessionUuid = result.Uuid;
             ReloadAccounts(account.Id);
             await RefreshSessionUiAsync();
-            Log($"Switched to {result.Username}. Join multiplayer to use the new account.");
-            ShowNotice("Account ready", $"Lunar is now using {result.Username}.", InfoBarSeverity.Success);
+            Log($"Switched to {result.Username}. Join from the Servers tab, or open multiplayer in Lunar.");
+            ShowNotice("Account ready", $"Minecraft is now using {result.Username}.", InfoBarSeverity.Success);
+            TryPopulateLunarAccount(profile, setActive: true);
         });
     }
 
@@ -565,6 +584,7 @@ public sealed partial class MainWindow : Window
             MinecraftProfile profile = await AuthenticateWithRetryAsync(parsed, label);
             StoredAccount stored = _store.Upsert(profile, source);
             ReloadAccounts(stored.Id);
+            TryPopulateLunarAccount(profile, setActive: true);
             string detail = $"{profile.Name} imported from {source}.";
             Log($"{label}: saved account {profile.Name} ({source}).");
             return new ImportResult(true, detail);
@@ -677,10 +697,261 @@ public sealed partial class MainWindow : Window
     private void ClearLog_Click(object sender, RoutedEventArgs e) =>
         ViewModel.LogText = "";
 
+    private void DirectConnectBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        ViewModel.DirectConnectAddress = DirectConnectBox.Text ?? "";
+    }
+
+    private void DirectConnectBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Enter)
+        {
+            e.Handled = true;
+            JoinDirect_Click(sender, e);
+        }
+    }
+
+    private async void JoinDirect_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy)
+            return;
+        await JoinAddressAsync(DirectConnectText, save: false);
+    }
+
+    private async void SaveDirect_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy)
+            return;
+        if (!MinecraftServerAddress.TryParse(DirectConnectText, out MinecraftServerAddress parsed))
+        {
+            ShowNotice("Invalid address", "Enter a server as host or host:port.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        SavedServer saved = _servers.Add(parsed.Display, parsed.Display);
+        ReloadServers(saved.Id);
+        Log($"Saved server {saved.Address}");
+        ShowNotice("Server saved", saved.Address, InfoBarSeverity.Success);
+        await PingServerAsync(ViewModel.SelectedServer);
+    }
+
+    private async void JoinSelectedServer_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy || ViewModel.SelectedServer is not { } selected)
+            return;
+        await JoinAddressAsync(selected.Address, save: false, markJoined: selected.Server);
+    }
+
+    private async void AddServer_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy)
+            return;
+
+        var nameBox = new TextBox { PlaceholderText = "Display name (optional)" };
+        var addressBox = new TextBox
+        {
+            PlaceholderText = "host or host:port",
+            Text = ViewModel.DirectConnectAddress ?? "",
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        var panel = new StackPanel { Spacing = 4 };
+        panel.Children.Add(nameBox);
+        panel.Children.Add(addressBox);
+
+        ContentDialog dialog = new()
+        {
+            XamlRoot = RootLayout.XamlRoot,
+            Title = "Add server",
+            Content = panel,
+            PrimaryButtonText = "Save",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            return;
+
+        string addressText = addressBox.Text ?? "";
+        if (!MinecraftServerAddress.TryParse(addressText, out MinecraftServerAddress parsed))
+        {
+            ShowNotice("Invalid address", "Enter a server as host or host:port.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        SavedServer saved = _servers.Add(nameBox.Text ?? "", parsed.Display);
+        ReloadServers(saved.Id);
+        Log($"Saved server {saved.Name} ({saved.Address})");
+        await PingServerAsync(ViewModel.SelectedServer);
+    }
+
+    private async void PingServers_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy)
+            return;
+        await PingAllServersAsync();
+    }
+
+    private void DeleteServer_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy || ViewModel.SelectedServer is not { } selected)
+            return;
+
+        int oldIndex = ViewModel.Servers.IndexOf(selected);
+        string name = selected.Name;
+        _servers.Remove(selected.Id);
+        ReloadServers();
+        if (ViewModel.Servers.Count > 0)
+            ViewModel.SelectedServer = ViewModel.Servers[Math.Min(oldIndex, ViewModel.Servers.Count - 1)];
+        Log($"Removed saved server {name}");
+        ShowNotice("Server removed", $"{name} was removed from the server list.", InfoBarSeverity.Success);
+    }
+
+    private string DirectConnectText =>
+        string.IsNullOrWhiteSpace(DirectConnectBox.Text)
+            ? ViewModel.DirectConnectAddress
+            : DirectConnectBox.Text;
+
+    private async Task JoinAddressAsync(string addressText, bool save, SavedServer? markJoined = null)
+    {
+        if (!MinecraftServerAddress.TryParse(addressText, out MinecraftServerAddress parsed))
+        {
+            ShowNotice("Invalid address", "Enter a server as host or host:port.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        await RunBusyAsync(async () =>
+        {
+            if (!_injector.Bridge.IsConnected)
+            {
+                Log("Not connected — injecting before joining a server.");
+                if (!await _injector.InjectAsync(Log, _lifetime.Token))
+                {
+                    SyncConnectionStatus();
+                    ShowNotice("Injection failed", _injector.Status, InfoBarSeverity.Error);
+                    return;
+                }
+                SyncConnectionStatus();
+            }
+
+            if (save)
+            {
+                SavedServer saved = _servers.Add(parsed.Display, parsed.Display);
+                markJoined ??= saved;
+                ReloadServers(saved.Id);
+            }
+
+            Log($"Joining {parsed.Display}…");
+            BridgeJoinResult? result = await _injector.Bridge.JoinServerAsync(
+                parsed.Host, parsed.Port, _lifetime.Token);
+            if (result == null || !result.Ok)
+            {
+                string error = result?.Error ?? "The bridge did not respond.";
+                Log($"joinServer failed: {error}");
+                ShowNotice("Unable to join", error, InfoBarSeverity.Error);
+                return;
+            }
+
+            if (markJoined != null)
+            {
+                _servers.MarkJoined(markJoined);
+                ReloadServers(markJoined.Id);
+            }
+
+            await RefreshSessionUiAsync();
+            Log($"Minecraft is connecting to {result.Address}.");
+            ShowNotice("Connecting", $"Minecraft is joining {result.Address}.", InfoBarSeverity.Success);
+        });
+    }
+
+    private async Task PingAllServersAsync()
+    {
+        try
+        {
+            IReadOnlyList<ServerCardViewModel> servers = ViewModel.Servers.ToList();
+            foreach (ServerCardViewModel server in servers)
+                server.IsPinging = true;
+            await Task.WhenAll(servers.Select(PingServerAsync));
+        }
+        catch (OperationCanceledException)
+        {
+            // Window is closing.
+        }
+        catch (Exception ex)
+        {
+            Log($"Server ping failed: {ex.Message}");
+        }
+    }
+
+    private async Task PingServerAsync(ServerCardViewModel? server)
+    {
+        if (server == null)
+            return;
+
+        try
+        {
+            server.IsPinging = true;
+            server.StatusLabel = "Pinging…";
+            ServerPingResult result = await ServerPing.QueryAsync(server.Address, _lifetime.Token);
+            void Apply() => server.ApplyPing(result);
+            if (!DispatcherQueue.HasThreadAccess)
+            {
+                DispatcherQueue.TryEnqueue(Apply);
+                return;
+            }
+            Apply();
+        }
+        catch (OperationCanceledException)
+        {
+            // Window is closing.
+        }
+    }
+
+    private void TryPopulateLunarAccount(MinecraftProfile profile, bool setActive)
+    {
+        if (!_settings.PopulateLunarAccountManager)
+            return;
+
+        LunarAccountWriteResult result = _lunarAccounts.Upsert(
+            profile.Name, profile.Uuid, profile.Token, RefreshTokenFor(profile), setActive);
+        Log(result.Detail);
+        if (!result.Success)
+            ShowNotice("Lunar account manager", result.Detail, InfoBarSeverity.Warning);
+    }
+
+    private void TryPopulateAllLunarAccounts()
+    {
+        IEnumerable<(string Name, string Uuid, string AccessToken, string RefreshToken)> accounts = _store.Accounts
+            .Where(a => !string.IsNullOrWhiteSpace(a.AccessToken))
+            .Select(a => (a.Name, a.Uuid, a.AccessToken, a.RefreshToken));
+        LunarAccountWriteResult result = _lunarAccounts.UpsertAll(accounts, _currentSessionUuid);
+        Log(result.Detail);
+        ShowNotice(
+            result.Success ? "Lunar account manager" : "Lunar account manager",
+            result.Detail,
+            result.Success ? InfoBarSeverity.Success : InfoBarSeverity.Warning);
+    }
+
+    private string RefreshTokenFor(MinecraftProfile profile)
+    {
+        if (!string.IsNullOrWhiteSpace(profile.RefreshToken))
+            return profile.RefreshToken;
+        return _store.Accounts.FirstOrDefault(a =>
+                   string.Equals(
+                       a.Uuid.Replace("-", "", StringComparison.Ordinal),
+                       profile.Uuid.Replace("-", "", StringComparison.Ordinal),
+                       StringComparison.OrdinalIgnoreCase))
+               ?.RefreshToken
+               ?? "";
+    }
+
     private void SettingsToggle_Toggled(object sender, RoutedEventArgs e)
     {
+        bool populateNow = _settingsReady
+                           && !_settings.PopulateLunarAccountManager
+                           && ViewModel.PopulateLunarAccountManager;
         _settings.MinimizeToTray = ViewModel.MinimizeToTray;
         _settings.ExitWhenMinecraftCloses = ViewModel.ExitWhenMinecraftCloses;
+        _settings.PopulateLunarAccountManager = ViewModel.PopulateLunarAccountManager;
         try
         {
             _settingsStore.Save(_settings);
@@ -689,7 +960,11 @@ public sealed partial class MainWindow : Window
         {
             Log($"Unable to save settings: {ex.Message}");
             ShowNotice("Settings not saved", ex.Message, InfoBarSeverity.Warning);
+            return;
         }
+
+        if (populateNow)
+            TryPopulateAllLunarAccounts();
     }
 
     private void AppWindow_Changed(AppWindow sender, AppWindowChangedEventArgs args)

@@ -90,6 +90,7 @@ public sealed class AccountCardViewModel : INotifyPropertyChanged
 public sealed class MainWindowViewModel : INotifyPropertyChanged
 {
     private AccountCardViewModel? _selectedAccount;
+    private ServerCardViewModel? _selectedServer;
     private bool _isBusy;
     private bool _isConnected;
     private string _connectionStatus = "Not connected";
@@ -99,10 +100,13 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string _worldStatus = "Unknown";
     private string _processStatus = "Minecraft not detected";
     private string _logText = "";
+    private string _directConnectAddress = "";
     private bool _minimizeToTray = true;
     private bool _exitWhenMinecraftCloses = true;
+    private bool _populateLunarAccountManager;
 
     public ObservableCollection<AccountCardViewModel> Accounts { get; } = new();
+    public ObservableCollection<ServerCardViewModel> Servers { get; } = new();
 
     public AccountCardViewModel? SelectedAccount
     {
@@ -113,6 +117,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             {
                 foreach (AccountCardViewModel account in Accounts)
                     account.IsSelected = ReferenceEquals(account, value);
+                RaiseCommandState();
+            }
+        }
+    }
+
+    public ServerCardViewModel? SelectedServer
+    {
+        get => _selectedServer;
+        set
+        {
+            if (SetField(ref _selectedServer, value))
+            {
+                foreach (ServerCardViewModel server in Servers)
+                    server.IsSelected = ReferenceEquals(server, value);
                 RaiseCommandState();
             }
         }
@@ -145,14 +163,32 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public string WorldStatus { get => _worldStatus; set => SetField(ref _worldStatus, value); }
     public string ProcessStatus { get => _processStatus; set => SetField(ref _processStatus, value); }
     public string LogText { get => _logText; set => SetField(ref _logText, value); }
+    public string DirectConnectAddress
+    {
+        get => _directConnectAddress;
+        set
+        {
+            if (SetField(ref _directConnectAddress, value))
+                RaiseCommandState();
+        }
+    }
     public bool MinimizeToTray { get => _minimizeToTray; set => SetField(ref _minimizeToTray, value); }
     public bool ExitWhenMinecraftCloses { get => _exitWhenMinecraftCloses; set => SetField(ref _exitWhenMinecraftCloses, value); }
+    public bool PopulateLunarAccountManager
+    {
+        get => _populateLunarAccountManager;
+        set => SetField(ref _populateLunarAccountManager, value);
+    }
 
     public bool IsNotBusy => !IsBusy;
     public bool CanUseAccount => !IsBusy && SelectedAccount != null;
     public bool CanDeleteAccount => !IsBusy && SelectedAccount != null;
     public bool CanRestore => !IsBusy && IsConnected;
     public bool CanDisconnect => !IsBusy && IsConnected;
+    public bool CanJoinDirect => !IsBusy && !string.IsNullOrWhiteSpace(DirectConnectAddress);
+    public bool CanJoinSelectedServer => !IsBusy && SelectedServer != null;
+    public bool CanDeleteServer => !IsBusy && SelectedServer != null;
+    public bool HasServers => Servers.Count > 0;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -171,6 +207,20 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         SelectedAccount = Accounts.FirstOrDefault(a => a.Id == selectedId);
         OnPropertyChanged(nameof(HasAccounts));
+    }
+
+    public void ReplaceServers(IEnumerable<SavedServer> servers, string? selectedId)
+    {
+        Servers.Clear();
+        foreach (SavedServer server in servers
+                     .OrderByDescending(s => s.LastJoinedAt ?? DateTimeOffset.MinValue)
+                     .ThenByDescending(s => s.AddedAt))
+        {
+            Servers.Add(new ServerCardViewModel(server));
+        }
+
+        SelectedServer = Servers.FirstOrDefault(s => s.Id == selectedId);
+        OnPropertyChanged(nameof(HasServers));
     }
 
     public bool HasAccounts => Accounts.Count > 0;
@@ -210,6 +260,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanDeleteAccount));
         OnPropertyChanged(nameof(CanRestore));
         OnPropertyChanged(nameof(CanDisconnect));
+        OnPropertyChanged(nameof(CanJoinDirect));
+        OnPropertyChanged(nameof(CanJoinSelectedServer));
+        OnPropertyChanged(nameof(CanDeleteServer));
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

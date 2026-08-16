@@ -25,7 +25,9 @@ static jmethodID g_initMethod = nullptr;
 static jmethodID g_setSessionMethod = nullptr;
 static jmethodID g_restoreMethod = nullptr;
 static jmethodID g_getInfoMethod = nullptr;
+static jmethodID g_joinServerMethod = nullptr;
 static jmethodID g_hintMethod = nullptr;
+static jmethodID g_hintConnectMethod = nullptr;
 static jobject g_gameClassLoader = nullptr;
 static CRITICAL_SECTION g_logCs;
 static bool g_logCsInit = false;
@@ -191,7 +193,7 @@ static void DiscoverClassHints(JNIEnv* env, jvmtiEnv* jvmti) {
     jclass* classes = nullptr;
     if (jvmti->GetLoadedClasses(&count, &classes) != JVMTI_ERROR_NONE) return;
 
-    std::string mcDot, sessionDot;
+    std::string mcDot, sessionDot, connectDot, addressDot, dataDot;
     for (jint i = 0; i < count; i++) {
         char* sig = nullptr;
         if (jvmti->GetClassSignature(classes[i], &sig, nullptr) != JVMTI_ERROR_NONE) {
@@ -219,6 +221,32 @@ static void DiscoverClassHints(JNIEnv* env, jvmtiEnv* jvmti) {
                 for (char& ch : s) if (ch == '/') ch = '.';
                 sessionDot = s;
             }
+            if (strstr(sig, "ConnectScreen;")
+                || strstr(sig, "GuiConnecting;")
+                || strcmp(sig, "Lnet/minecraft/class_412;") == 0
+                || strcmp(sig, "Lawz;") == 0
+                || strcmp(sig, "Laxk;") == 0) {
+                std::string s(sig + 1);
+                if (!s.empty() && s.back() == ';') s.pop_back();
+                for (char& ch : s) if (ch == '/') ch = '.';
+                connectDot = s;
+            }
+            if (strstr(sig, "multiplayer/resolver/ServerAddress;")
+                || strstr(sig, "multiplayer/ServerAddress;")
+                || strcmp(sig, "Lnet/minecraft/class_639;") == 0) {
+                std::string s(sig + 1);
+                if (!s.empty() && s.back() == ';') s.pop_back();
+                for (char& ch : s) if (ch == '/') ch = '.';
+                addressDot = s;
+            }
+            if (strstr(sig, "multiplayer/ServerData;")
+                || strstr(sig, "network/ServerInfo;")
+                || strcmp(sig, "Lnet/minecraft/class_642;") == 0) {
+                std::string s(sig + 1);
+                if (!s.empty() && s.back() == ';') s.pop_back();
+                for (char& ch : s) if (ch == '/') ch = '.';
+                dataDot = s;
+            }
         }
         if (sig) jvmti->Deallocate((unsigned char*)sig);
         env->DeleteLocalRef(classes[i]);
@@ -233,6 +261,17 @@ static void DiscoverClassHints(JNIEnv* env, jvmtiEnv* jvmti) {
         if (jmc) env->DeleteLocalRef(jmc);
         if (jss) env->DeleteLocalRef(jss);
         LogStr("Hints mc=" + mcDot + " session=" + sessionDot);
+    }
+    if (g_hintConnectMethod && (!connectDot.empty() || !addressDot.empty() || !dataDot.empty())) {
+        jstring jc = env->NewStringUTF(connectDot.c_str());
+        jstring ja = env->NewStringUTF(addressDot.c_str());
+        jstring jd = env->NewStringUTF(dataDot.c_str());
+        env->CallStaticVoidMethod(g_helperClass, g_hintConnectMethod, jc, ja, jd);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+        if (jc) env->DeleteLocalRef(jc);
+        if (ja) env->DeleteLocalRef(ja);
+        if (jd) env->DeleteLocalRef(jd);
+        LogStr("Hints connect=" + connectDot + " address=" + addressDot + " data=" + dataDot);
     }
 }
 
@@ -280,10 +319,15 @@ static bool DefineHelper(JNIEnv* env) {
         "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
     g_restoreMethod = env->GetStaticMethodID(g_helperClass, "restoreSession", "()Ljava/lang/String;");
     g_getInfoMethod = env->GetStaticMethodID(g_helperClass, "getSessionInfo", "()Ljava/lang/String;");
+    g_joinServerMethod = env->GetStaticMethodID(g_helperClass, "joinServer",
+        "(Ljava/lang/String;I)Ljava/lang/String;");
     g_hintMethod = env->GetStaticMethodID(g_helperClass, "hint",
         "(Ljava/lang/String;Ljava/lang/String;)V");
+    g_hintConnectMethod = env->GetStaticMethodID(g_helperClass, "hintConnect",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
 
-    if (env->ExceptionCheck() || !g_initMethod || !g_setSessionMethod || !g_restoreMethod || !g_getInfoMethod) {
+    if (env->ExceptionCheck() || !g_initMethod || !g_setSessionMethod || !g_restoreMethod
+        || !g_getInfoMethod || !g_joinServerMethod || !g_hintMethod || !g_hintConnectMethod) {
         env->ExceptionClear();
         Log("Failed to resolve SessionSwitcher methods");
         return false;
@@ -340,6 +384,30 @@ static std::string ExtractJsonString(const std::string& json, const char* key) {
         out += json[i];
     }
     return out;
+}
+
+static int ExtractJsonInt(const std::string& json, const char* key, int fallback) {
+    std::string needle = std::string("\"") + key + "\"";
+    size_t p = json.find(needle);
+    if (p == std::string::npos) return fallback;
+    p = json.find(':', p);
+    if (p == std::string::npos) return fallback;
+    p++;
+    while (p < json.size() && (json[p] == ' ' || json[p] == '\t')) p++;
+    int sign = 1;
+    if (p < json.size() && json[p] == '-') {
+        sign = -1;
+        p++;
+    }
+    int value = 0;
+    bool any = false;
+    while (p < json.size() && json[p] >= '0' && json[p] <= '9') {
+        any = true;
+        if (value > 100000000) return fallback;
+        value = value * 10 + (json[p] - '0');
+        p++;
+    }
+    return any ? sign * value : fallback;
 }
 
 static std::string HandleCommand(JNIEnv* env, const std::string& line) {
@@ -433,6 +501,26 @@ static std::string HandleCommand(JNIEnv* env, const std::string& line) {
         std::string err = result.rfind("error:", 0) == 0 ? result.substr(6) : result;
         if (err == "in_world")
             return "{\"ok\":false,\"error\":\"Disconnect from the world before restoring\",\"inWorld\":true}\n";
+        return "{\"ok\":false,\"error\":\"" + JsonEscape(err) + "\"}\n";
+    }
+
+    if (op == "joinServer") {
+        std::string host = ExtractJsonString(line, "host");
+        int port = ExtractJsonInt(line, "port", 25565);
+        jstring jh = env->NewStringUTF(host.c_str());
+        jstring r = (jstring)env->CallStaticObjectMethod(
+            g_helperClass, g_joinServerMethod, jh, (jint)port);
+        if (jh) env->DeleteLocalRef(jh);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return "{\"ok\":false,\"error\":\"joinServer exception\"}\n";
+        }
+        std::string result = JStringToUtf8(env, r);
+        if (r) env->DeleteLocalRef(r);
+        if (result.rfind("ok:", 0) == 0) {
+            return "{\"ok\":true,\"address\":\"" + JsonEscape(result.substr(3)) + "\",\"ready\":true}\n";
+        }
+        std::string err = result.rfind("error:", 0) == 0 ? result.substr(6) : result;
         return "{\"ok\":false,\"error\":\"" + JsonEscape(err) + "\"}\n";
     }
 

@@ -4,8 +4,10 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -17,20 +19,27 @@ import java.util.concurrent.TimeUnit;
  * Names are only fast paths. The final resolver validates class structure,
  * constructor shape and the current field value before it permits a write.
  * This covers legacy 1.8.9 Session, 1.21 Fabric/Yarn Session and the User
- * class used by official-name 26.1/26.2 clients.
+ * class used by official-name 26.1/26.2 clients. Server joins use Minecraft's
+ * ConnectScreen / GuiConnecting path rather than Lunar's account-gated menu.
  */
 public final class SessionSwitcher {
     private static Object launchSession;
     private static Object minecraftInstance;
+    private static Class<?> minecraftClass;
     private static Field sessionField;
     private static Class<?> sessionClass;
     private static Method getUsername;
     private static Method getPlayerId;
     private static Field playerField;
     private static Field worldField;
+    private static Field screenField;
+    private static Method setScreenMethod;
     private static Method scheduleMethod;
     private static String hintedMcClass;
     private static String hintedSessionClass;
+    private static String hintedConnectClass;
+    private static String hintedServerAddressClass;
+    private static String hintedServerDataClass;
     private static volatile boolean ready;
 
     private SessionSwitcher() {}
@@ -42,6 +51,16 @@ public final class SessionSwitcher {
         ready = false;
     }
 
+    /** Optional connect-path hints supplied by native JVMTI discovery. */
+    public static synchronized void hintConnect(
+            String connectClassName, String serverAddressClassName, String serverDataClassName) {
+        if (connectClassName != null && !connectClassName.isEmpty()) hintedConnectClass = connectClassName;
+        if (serverAddressClassName != null && !serverAddressClassName.isEmpty())
+            hintedServerAddressClass = serverAddressClassName;
+        if (serverDataClassName != null && !serverDataClassName.isEmpty())
+            hintedServerDataClass = serverDataClassName;
+    }
+
     public static synchronized String init() {
         try {
             if (ready) return "ok";
@@ -51,6 +70,9 @@ public final class SessionSwitcher {
 
             minecraftInstance = findMinecraftInstance(mcClass);
             if (minecraftInstance == null) return "Minecraft instance is null";
+            minecraftClass = mcClass;
+            screenField = findScreenField(mcClass);
+            setScreenMethod = findSetScreenMethod(mcClass, screenField);
 
             sessionClass = findSessionClass();
             sessionField = sessionClass == null ? null : findFieldOfType(mcClass, sessionClass);
@@ -156,6 +178,35 @@ public final class SessionSwitcher {
         if (failure[0] != null) return "error:" + failure[0];
         try {
             return "ok:" + readUsername();
+        } catch (Throwable t) {
+            return "error:" + describeThrowable(t);
+        }
+    }
+
+    public static synchronized String joinServer(String host, int port) {
+        if (isBlank(host) || host.trim().length() > 256 || port < 1 || port > 65535) {
+            return "error:invalid_address";
+        }
+        host = host.trim();
+        String initResult = init();
+        if (!ready) return "error:" + initResult;
+
+        try {
+            final String connectHost = host;
+            final int connectPort = port;
+            final String[] failure = new String[1];
+            boolean ran = runOnGameThread(() -> {
+                try {
+                    if (!connectNow(connectHost, connectPort)) {
+                        failure[0] = "connect_path_not_found";
+                    }
+                } catch (Throwable t) {
+                    failure[0] = describeThrowable(t);
+                }
+            });
+            if (!ran) return "error:game_thread_timeout";
+            if (failure[0] != null) return "error:" + failure[0];
+            return "ok:" + host + ":" + port;
         } catch (Throwable t) {
             return "error:" + describeThrowable(t);
         }
@@ -542,6 +593,352 @@ public final class SessionSwitcher {
                     method.setAccessible(true);
                     return method;
                 } catch (Throwable ignored) {}
+            }
+        }
+        return null;
+    }
+
+    private static boolean connectNow(String host, int port) throws Exception {
+        String combined = combinedAddress(host, port);
+        Class<?>[] candidates = connectClassCandidates();
+        for (int i = 0; i < candidates.length; i++) {
+            if (tryModernConnect(candidates[i], host, port, combined)) return true;
+        }
+        for (int i = 0; i < candidates.length; i++) {
+            if (tryLegacyConnect(candidates[i], host, port, combined)) return true;
+        }
+        return false;
+    }
+
+    private static String combinedAddress(String host, int port) {
+        boolean ipv6 = host.indexOf(':') >= 0;
+        String wrapped = ipv6 ? "[" + host + "]" : host;
+        return wrapped + ":" + port;
+    }
+
+    private static Class<?>[] connectClassCandidates() {
+        List<Class<?>> found = new ArrayList<Class<?>>();
+        String[] names = {
+                hintedConnectClass,
+                "net.minecraft.client.gui.screens.ConnectScreen",
+                "net.minecraft.client.gui.screen.ConnectScreen",
+                "net.minecraft.class_412",
+                "net.minecraft.client.multiplayer.GuiConnecting",
+                "net.minecraft.client.gui.GuiConnecting",
+                "awz",
+                "axk"
+        };
+        for (int i = 0; i < names.length; i++) {
+            Class<?> type = tryLoad(names[i]);
+            if (type != null && !found.contains(type)) found.add(type);
+        }
+        return found.toArray(new Class<?>[0]);
+    }
+
+    private static boolean tryModernConnect(Class<?> connectClass, String host, int port, String combined) {
+        if (connectClass == null || minecraftClass == null) return false;
+        Method[] methods = connectClass.getDeclaredMethods();
+        Arrays.sort(methods, Comparator.comparingInt((Method method) -> method.getParameterTypes().length).reversed());
+
+        Object parent = currentScreen();
+        for (int m = 0; m < methods.length; m++) {
+            Method method = methods[m];
+            if (!Modifier.isStatic(method.getModifiers()) || method.getReturnType() != void.class) continue;
+            Class<?>[] types = method.getParameterTypes();
+            if (types.length < 4 || types.length > 6) continue;
+            if (!types[1].isAssignableFrom(minecraftClass)) continue;
+
+            Object[] args = buildConnectArgs(types, parent, host, port, combined);
+            if (args == null) continue;
+            try {
+                method.setAccessible(true);
+                method.invoke(null, args);
+                return true;
+            } catch (Throwable ignored) {
+                // Try the next structurally matching connect method.
+            }
+        }
+        return false;
+    }
+
+    private static Object[] buildConnectArgs(
+            Class<?>[] types, Object parent, String host, int port, String combined) {
+        Object[] args = new Object[types.length];
+        args[0] = parent != null && types[0].isInstance(parent) ? parent : null;
+        args[1] = minecraftInstance;
+
+        int objectIndex = 0;
+        for (int i = 2; i < types.length; i++) {
+            Class<?> type = types[i];
+            if (type == boolean.class || type == Boolean.class) {
+                args[i] = Boolean.FALSE;
+            } else if (type == int.class || type == Integer.class) {
+                args[i] = Integer.valueOf(port);
+            } else if (type == String.class) {
+                args[i] = objectIndex == 0 ? host : combined;
+                objectIndex++;
+            } else if (type.isPrimitive()) {
+                return null;
+            } else {
+                Object created = null;
+                if (objectIndex == 0) {
+                    created = createServerAddress(type, host, port, combined);
+                    if (created == null) created = createServerData(type, host, combined);
+                } else if (objectIndex == 1) {
+                    created = createServerData(type, host, combined);
+                    if (created == null) created = createServerAddress(type, host, port, combined);
+                }
+                if (created == null && i == types.length - 1) {
+                    args[i] = null;
+                } else if (created == null) {
+                    return null;
+                } else {
+                    args[i] = created;
+                    objectIndex++;
+                }
+            }
+        }
+        return args;
+    }
+
+    private static boolean tryLegacyConnect(Class<?> connectingClass, String host, int port, String combined)
+            throws Exception {
+        if (connectingClass == null || minecraftClass == null) return false;
+        Object parent = currentScreen();
+        Object screen = createLegacyConnectingScreen(connectingClass, parent, host, port, combined);
+        if (screen == null) return false;
+        Method setter = setScreenMethod;
+        if (setter == null) setter = findSetScreenMethod(minecraftClass, screenField);
+        if (setter == null) setter = findSetScreenFor(minecraftClass, screen.getClass());
+        if (setter == null) return false;
+        setter.setAccessible(true);
+        setter.invoke(minecraftInstance, new Object[]{screen});
+        return true;
+    }
+
+    private static Object createLegacyConnectingScreen(
+            Class<?> connectingClass, Object parent, String host, int port, String combined) {
+        Constructor<?>[] constructors = connectingClass.getDeclaredConstructors();
+        Arrays.sort(constructors, Comparator.comparingInt((Constructor<?> ctor) -> ctor.getParameterTypes().length).reversed());
+
+        for (int i = 0; i < constructors.length; i++) {
+            Constructor<?> ctor = constructors[i];
+            Class<?>[] types = ctor.getParameterTypes();
+            if (types.length < 3 || types.length > 4) continue;
+            if (!types[1].isAssignableFrom(minecraftClass)) continue;
+            Object[] args = new Object[types.length];
+            args[0] = parent != null && types[0].isInstance(parent) ? parent : null;
+            args[1] = minecraftInstance;
+            boolean built = true;
+            for (int p = 2; p < types.length; p++) {
+                Class<?> type = types[p];
+                if (type == String.class) args[p] = host;
+                else if (type == int.class || type == Integer.class) args[p] = Integer.valueOf(port);
+                else if (!type.isPrimitive()) {
+                    Object data = createServerData(type, host, combined);
+                    if (data == null) {
+                        built = false;
+                        break;
+                    }
+                    args[p] = data;
+                } else {
+                    built = false;
+                    break;
+                }
+            }
+            if (!built) continue;
+            try {
+                ctor.setAccessible(true);
+                return ctor.newInstance(args);
+            } catch (Throwable ignored) {
+                // Try the next structurally matching constructor.
+            }
+        }
+        return null;
+    }
+
+    private static Object createServerAddress(Class<?> type, String host, int port, String combined) {
+        Object parsed = invokeStaticParser(type, combined);
+        if (parsed != null) return parsed;
+        parsed = invokeStaticParser(type, host);
+        if (parsed != null) return parsed;
+
+        Constructor<?>[] constructors = type.getDeclaredConstructors();
+        for (int i = 0; i < constructors.length; i++) {
+            Class<?>[] types = constructors[i].getParameterTypes();
+            try {
+                constructors[i].setAccessible(true);
+                if (types.length == 2 && types[0] == String.class
+                        && (types[1] == int.class || types[1] == Integer.class)) {
+                    return constructors[i].newInstance(new Object[]{host, Integer.valueOf(port)});
+                }
+                if (types.length == 1 && types[0] == String.class) {
+                    Object created = constructors[i].newInstance(new Object[]{combined});
+                    if (created != null) return created;
+                }
+            } catch (Throwable ignored) {}
+        }
+        return null;
+    }
+
+    private static Object invokeStaticParser(Class<?> type, String value) {
+        String[] names = {"parseString", "parse", "method_29545", "a"};
+        for (int i = 0; i < names.length; i++) {
+            try {
+                Method method = type.getDeclaredMethod(names[i], String.class);
+                if (!Modifier.isStatic(method.getModifiers())) continue;
+                if (!type.isAssignableFrom(method.getReturnType()) && method.getReturnType() != type) continue;
+                method.setAccessible(true);
+                Object parsed = method.invoke(null, new Object[]{value});
+                if (parsed != null) return parsed;
+            } catch (Throwable ignored) {}
+        }
+        Method[] methods = type.getDeclaredMethods();
+        for (int i = 0; i < methods.length; i++) {
+            Method method = methods[i];
+            if (!Modifier.isStatic(method.getModifiers()) || method.getParameterTypes().length != 1) continue;
+            if (method.getParameterTypes()[0] != String.class) continue;
+            if (!type.isAssignableFrom(method.getReturnType()) && method.getReturnType() != type) continue;
+            try {
+                method.setAccessible(true);
+                Object parsed = method.invoke(null, new Object[]{value});
+                if (parsed != null) return parsed;
+            } catch (Throwable ignored) {}
+        }
+        return null;
+    }
+
+    private static Object createServerData(Class<?> type, String host, String combined) {
+        Constructor<?>[] constructors = type.getDeclaredConstructors();
+        Arrays.sort(constructors, Comparator.comparingInt((Constructor<?> ctor) -> ctor.getParameterTypes().length));
+        String name = host;
+        for (int i = 0; i < constructors.length; i++) {
+            Class<?>[] types = constructors[i].getParameterTypes();
+            if (types.length < 2 || types.length > 3) continue;
+            if (types[0] != String.class || types[1] != String.class) continue;
+            Object[] args = new Object[types.length];
+            args[0] = name;
+            args[1] = combined;
+            if (types.length == 3) {
+                if (types[2] == boolean.class || types[2] == Boolean.class) {
+                    args[2] = Boolean.FALSE;
+                } else if (types[2].isEnum()) {
+                    args[2] = findServerTypeEnum(types[2]);
+                    if (args[2] == null) continue;
+                } else {
+                    continue;
+                }
+            }
+            try {
+                constructors[i].setAccessible(true);
+                return constructors[i].newInstance(args);
+            } catch (Throwable ignored) {}
+        }
+        if (hintedServerDataClass != null) {
+            Class<?> hinted = tryLoad(hintedServerDataClass);
+            if (hinted != null && hinted != type) return createServerData(hinted, host, combined);
+        }
+        return null;
+    }
+
+    private static Object findServerTypeEnum(Class<?> type) {
+        Object[] values = type.getEnumConstants();
+        if (values == null || values.length == 0) return null;
+        for (int i = 0; i < values.length; i++) {
+            String name = ((Enum<?>) values[i]).name();
+            if ("OTHER".equalsIgnoreCase(name) || "NORMAL".equalsIgnoreCase(name)) return values[i];
+        }
+        return values[values.length - 1];
+    }
+
+    private static Object currentScreen() {
+        if (screenField == null || minecraftInstance == null) return null;
+        try {
+            return screenField.get(minecraftInstance);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static Field findScreenField(Class<?> owner) {
+        String[] names = {"currentScreen", "screen", "field_71462_r", "field_1752"};
+        for (int i = 0; i < names.length; i++) {
+            Field field = findField(owner, names[i]);
+            if (field != null && !Modifier.isStatic(field.getModifiers())
+                    && looksLikeScreenClass(field.getType())) {
+                try { field.setAccessible(true); } catch (Throwable ignored) {}
+                return field;
+            }
+        }
+        Field only = null;
+        for (Class<?> current = owner; current != null && current != Object.class;
+             current = current.getSuperclass()) {
+            Field[] fields = current.getDeclaredFields();
+            for (int i = 0; i < fields.length; i++) {
+                Field field = fields[i];
+                if (Modifier.isStatic(field.getModifiers()) || !looksLikeScreenClass(field.getType())) continue;
+                if (only != null) return null;
+                only = field;
+            }
+        }
+        if (only != null) {
+            try { only.setAccessible(true); } catch (Throwable ignored) {}
+        }
+        return only;
+    }
+
+    private static boolean looksLikeScreenClass(Class<?> type) {
+        if (type == null || type.isPrimitive() || type.isArray()
+                || type.getName().startsWith("java.")) return false;
+        String name = type.getName();
+        return name.endsWith("Screen") || name.endsWith("GuiScreen")
+                || name.endsWith("class_437") || name.equals("axu");
+    }
+
+    private static Method findSetScreenMethod(Class<?> mcClass, Field screen) {
+        Class<?> screenType = screen == null ? null : screen.getType();
+        String[] names = {"setScreen", "displayGuiScreen", "openScreen", "method_1507"};
+        for (int i = 0; i < names.length; i++) {
+            Method method = findOneArgMethod(mcClass, names[i], screenType);
+            if (method != null) return method;
+        }
+        if (screenType == null) return null;
+        return findSetScreenFor(mcClass, screenType);
+    }
+
+    private static Method findSetScreenFor(Class<?> mcClass, Class<?> screenType) {
+        Method found = null;
+        for (Class<?> current = mcClass; current != null && current != Object.class;
+             current = current.getSuperclass()) {
+            Method[] methods = current.getDeclaredMethods();
+            for (int i = 0; i < methods.length; i++) {
+                Method method = methods[i];
+                if (Modifier.isStatic(method.getModifiers()) || method.getParameterTypes().length != 1) continue;
+                if (method.getReturnType() != void.class) continue;
+                Class<?> param = method.getParameterTypes()[0];
+                if (!param.isAssignableFrom(screenType) && param != screenType) continue;
+                if (found != null) return null;
+                found = method;
+            }
+        }
+        if (found != null) {
+            try { found.setAccessible(true); } catch (Throwable ignored) {}
+        }
+        return found;
+    }
+
+    private static Method findOneArgMethod(Class<?> owner, String name, Class<?> preferredParam) {
+        for (Class<?> current = owner; current != null && current != Object.class;
+             current = current.getSuperclass()) {
+            Method[] methods = current.getDeclaredMethods();
+            for (int i = 0; i < methods.length; i++) {
+                Method method = methods[i];
+                if (!method.getName().equals(name) || method.getParameterTypes().length != 1) continue;
+                if (preferredParam != null
+                        && !method.getParameterTypes()[0].isAssignableFrom(preferredParam)
+                        && method.getParameterTypes()[0] != preferredParam) continue;
+                try { method.setAccessible(true); } catch (Throwable ignored) {}
+                return method;
             }
         }
         return null;

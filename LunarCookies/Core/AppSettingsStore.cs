@@ -7,6 +7,7 @@ public sealed class AppSettings
 {
     public bool MinimizeToTray { get; set; } = true;
     public bool ExitWhenMinecraftCloses { get; set; } = true;
+    public bool PopulateLunarAccountManager { get; set; }
 }
 
 public sealed class AppSettingsStore

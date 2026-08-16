@@ -15,6 +15,13 @@ public sealed class BridgeSessionInfo
     public string Error { get; init; } = "";
 }
 
+public sealed class BridgeJoinResult
+{
+    public bool Ok { get; init; }
+    public string Address { get; init; } = "";
+    public string Error { get; init; } = "";
+}
+
 /// <summary>
 /// TCP client for switcher.dll on port 25591. Line-delimited JSON request/response.
 /// The handshake is tied to a target PID so a bridge in another Minecraft
@@ -104,6 +111,20 @@ public sealed class BridgeClient : IDisposable
     {
         var resp = await SendAsync(new { op = "restoreSession" }, ct).ConfigureAwait(false);
         return ParseSession(resp);
+    }
+
+    public async Task<BridgeJoinResult?> JoinServerAsync(string host, int port, CancellationToken ct = default)
+    {
+        var resp = await SendAsync(new { op = "joinServer", host, port }, ct).ConfigureAwait(false);
+        if (resp == null)
+            return null;
+
+        return new BridgeJoinResult
+        {
+            Ok = resp["ok"]?.GetValue<bool>() ?? false,
+            Address = resp["address"]?.GetValue<string>() ?? "",
+            Error = resp["error"]?.GetValue<string>() ?? ""
+        };
     }
 
     private static BridgeSessionInfo? ParseSession(JsonNode? resp)

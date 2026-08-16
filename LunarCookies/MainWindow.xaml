@@ -84,6 +84,11 @@
             <SymbolIcon Symbol="Contact"/>
           </NavigationViewItem.Icon>
         </NavigationViewItem>
+        <NavigationViewItem Content="Servers" Tag="servers">
+          <NavigationViewItem.Icon>
+            <FontIcon Glyph="&#xE774;"/>
+          </NavigationViewItem.Icon>
+        </NavigationViewItem>
         <NavigationViewItem Content="Injection" Tag="injection">
           <NavigationViewItem.Icon>
             <FontIcon Glyph="&#xE90F;"/>
@@ -263,6 +268,156 @@
           </Border>
         </Grid>
 
+        <Grid x:Name="ServersPage" Margin="16,12,16,16" Visibility="Collapsed">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+
+          <StackPanel Spacing="3" Margin="4,0,4,14">
+            <TextBlock Text="Server browser" Style="{StaticResource TitleTextBlockStyle}"/>
+            <TextBlock Text="Join from this window so Lunar's Microsoft-account menu is not required."
+                       Foreground="{ThemeResource SecondaryTextBrush}" TextWrapping="Wrap"/>
+          </StackPanel>
+
+          <Border Grid.Row="1" Margin="4,0,4,12" Padding="12"
+                  Background="{ThemeResource CardBackgroundBrush}"
+                  BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1"
+                  CornerRadius="10">
+            <Grid ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <TextBox x:Name="DirectConnectBox"
+                       PlaceholderText="host or host:port"
+                       Text="{x:Bind ViewModel.DirectConnectAddress, Mode=TwoWay}"
+                       IsEnabled="{Binding IsNotBusy}"
+                       TextChanged="DirectConnectBox_TextChanged"
+                       KeyDown="DirectConnectBox_KeyDown"/>
+              <Button Grid.Column="1" Style="{StaticResource BrandButtonStyle}"
+                      IsEnabled="{Binding CanJoinDirect}" Click="JoinDirect_Click">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <FontIcon Glyph="&#xE768;" FontSize="14"/>
+                  <TextBlock Text="Join"/>
+                </StackPanel>
+              </Button>
+              <Button Grid.Column="2" Style="{StaticResource CardButtonStyle}"
+                      IsEnabled="{Binding CanJoinDirect}" Click="SaveDirect_Click"
+                      Content="Save"/>
+            </Grid>
+          </Border>
+
+          <Grid Grid.Row="2">
+            <ListView x:Name="ServerList"
+                      ItemsSource="{Binding Servers}"
+                      SelectedItem="{Binding SelectedServer, Mode=TwoWay}"
+                      SelectionMode="Single"
+                      IsEnabled="{Binding IsNotBusy}"
+                      ScrollViewer.VerticalScrollBarVisibility="Auto">
+              <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem">
+                  <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                  <Setter Property="Padding" Value="0"/>
+                  <Setter Property="Margin" Value="4,0,4,8"/>
+                  <Setter Property="MinHeight" Value="0"/>
+                </Style>
+              </ListView.ItemContainerStyle>
+              <ListView.ItemTemplate>
+                <DataTemplate x:DataType="vm:ServerCardViewModel">
+                  <Grid>
+                    <Border CornerRadius="11"
+                            BorderBrush="{StaticResource BrandGreenBrush}"
+                            BorderThickness="2"
+                            Visibility="{x:Bind SelectionVisibility, Mode=OneWay}"/>
+                    <Border Margin="3" Padding="14" CornerRadius="8"
+                            Background="{ThemeResource CardBackgroundBrush}"
+                            BorderBrush="{ThemeResource CardBorderBrush}"
+                            BorderThickness="1">
+                      <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*"/>
+                          <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="3">
+                          <TextBlock Text="{x:Bind Name}" FontSize="16" FontWeight="SemiBold"
+                                     TextTrimming="CharacterEllipsis"/>
+                          <TextBlock Text="{x:Bind Address}" FontSize="12"
+                                     Foreground="{ThemeResource SecondaryTextBrush}"
+                                     TextTrimming="CharacterEllipsis"/>
+                          <TextBlock Text="{x:Bind Motd, Mode=OneWay}" FontSize="12"
+                                     Foreground="{ThemeResource SecondaryTextBrush}"
+                                     TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="3" HorizontalAlignment="Right">
+                          <TextBlock Text="{x:Bind StatusLabel, Mode=OneWay}" FontWeight="SemiBold"
+                                     HorizontalAlignment="Right"/>
+                          <TextBlock Text="{x:Bind PlayersLabel, Mode=OneWay}" FontSize="12"
+                                     Foreground="{ThemeResource SecondaryTextBrush}"
+                                     HorizontalAlignment="Right"/>
+                          <TextBlock Text="{x:Bind LastJoinedLabel}" FontSize="11"
+                                     Foreground="{ThemeResource SecondaryTextBrush}"
+                                     HorizontalAlignment="Right"/>
+                        </StackPanel>
+                      </Grid>
+                    </Border>
+                  </Grid>
+                </DataTemplate>
+              </ListView.ItemTemplate>
+            </ListView>
+
+            <StackPanel x:Name="EmptyServersState" HorizontalAlignment="Center"
+                        VerticalAlignment="Center" Spacing="8">
+              <FontIcon Glyph="&#xE774;" FontSize="42"
+                        Foreground="{ThemeResource SecondaryTextBrush}"/>
+              <TextBlock Text="No saved servers" FontSize="20" FontWeight="SemiBold"
+                         HorizontalAlignment="Center"/>
+              <TextBlock Text="Direct-connect above, or save a server to ping and join later."
+                         Foreground="{ThemeResource SecondaryTextBrush}"
+                         TextAlignment="Center" MaxWidth="420"/>
+            </StackPanel>
+          </Grid>
+
+          <Border Grid.Row="3" Margin="4,14,4,0" Padding="12"
+                  Background="{ThemeResource CardBackgroundBrush}"
+                  BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1"
+                  CornerRadius="10">
+            <Grid ColumnSpacing="8">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <Button Style="{StaticResource BrandButtonStyle}"
+                      IsEnabled="{Binding CanJoinSelectedServer}" Click="JoinSelectedServer_Click">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <FontIcon Glyph="&#xE768;" FontSize="14"/>
+                  <TextBlock Text="Join selected"/>
+                </StackPanel>
+              </Button>
+              <Button Grid.Column="1" Style="{StaticResource CardButtonStyle}"
+                      IsEnabled="{Binding IsNotBusy}" Click="AddServer_Click"
+                      Content="Add server"/>
+              <Button Grid.Column="2" Style="{StaticResource CardButtonStyle}"
+                      IsEnabled="{Binding IsNotBusy}" Click="PingServers_Click"
+                      Content="Ping"/>
+              <Button Grid.Column="4" Style="{StaticResource CardButtonStyle}"
+                      IsEnabled="{Binding CanDeleteServer}" Click="DeleteServer_Click"
+                      Foreground="{ThemeResource SystemFillColorCriticalBrush}">
+                <StackPanel Orientation="Horizontal" Spacing="7">
+                  <FontIcon Glyph="&#xE74D;" FontSize="14"/>
+                  <TextBlock Text="Delete"/>
+                </StackPanel>
+              </Button>
+            </Grid>
+          </Border>
+        </Grid>
+
         <Grid x:Name="InjectionPage" Margin="20,12,20,20" Visibility="Collapsed">
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -414,6 +569,24 @@
                 </StackPanel>
                 <ToggleSwitch Grid.Column="1" x:Name="ExitWithMinecraftToggle"
                               IsOn="{Binding ExitWhenMinecraftCloses, Mode=TwoWay}"
+                              Toggled="SettingsToggle_Toggled"/>
+              </Grid>
+
+              <Rectangle Height="1" Fill="{ThemeResource CardBorderBrush}"/>
+
+              <Grid ColumnSpacing="20">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="4">
+                  <TextBlock Text="Populate Lunar account manager"
+                             FontSize="16" FontWeight="SemiBold"/>
+                  <TextBlock Text="When enabled, Lunar Cookies writes your Microsoft accounts into Lunar Client's local accounts.json using Lunar's own file format (including refresh tokens). Lunar only reads that file at startup, so fully close Lunar and relaunch it afterward. Cookie-only accounts without a refresh token may still be rejected. Off by default."
+                             TextWrapping="Wrap" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                </StackPanel>
+                <ToggleSwitch Grid.Column="1" x:Name="PopulateLunarAccountManagerToggle"
+                              IsOn="{Binding PopulateLunarAccountManager, Mode=TwoWay}"
                               Toggled="SettingsToggle_Toggled"/>
               </Grid>
             </StackPanel>

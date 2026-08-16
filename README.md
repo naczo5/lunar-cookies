@@ -29,6 +29,9 @@ bridge will not write to a guessed field.
 - **Accounts** displays saved accounts in a three-column card grid. Select a
   card and use the bottom bar to switch, restore the account Lunar launched
   with, or delete the saved credentials.
+- **Servers** lists saved Minecraft servers and a direct-connect field. Join
+  uses Minecraft's own connect path, so Lunar's Microsoft-account menu is not
+  required. Saved servers can be pinged for latency, player counts, and MOTD.
 - Account files can be dragged onto any part of the window. Multiple dropped
   files are authenticated sequentially with spacing between requests.
 - Transient Microsoft/Xbox/Minecraft failures are retried with backoff and
@@ -36,8 +39,10 @@ bridge will not write to a guessed field.
   HTTP status without logging cookies, tokens, or response bodies.
 - **Injection** contains bridge connection controls, current Lunar session
   details, process detection, and the diagnostic log.
-- **Settings** controls minimize-to-tray behavior and whether the switcher exits
-  automatically after the detected Minecraft process closes.
+- **Settings** controls minimize-to-tray behavior, whether the switcher exits
+  automatically after the detected Minecraft process closes, and an optional
+  attempt to populate Lunar Client's local account manager. That last setting
+  is off by default.
 - Switching accounts automatically injects or reconnects the bridge when
   needed. Switching and restoration are blocked while Lunar is in a world or
   connected to a server.
@@ -93,7 +98,8 @@ dotnet run --project LunarCookies.Tests -c Release
 3. On **Accounts**, import a Localts token or cookie file.
 4. Select an account and click **Use account**. The bridge connects
    automatically when needed.
-5. Join a server after the session status shows the selected account.
+5. Open **Servers** and join a host, or use Lunar's own menu if a Microsoft
+   account is already signed in there.
 6. Disconnect to the main menu before switching or restoring an account.
 
 **Restore launch account** restores the session Lunar started with; it is not a
@@ -114,7 +120,15 @@ Accounts remain compatible with earlier releases and are stored at
 `%AppData%\LunarCookies\accounts.json`. Tokens are currently stored in
 plaintext, so treat this file as a secret.
 
-Preferences are stored at `%AppData%\LunarCookies\settings.json`.
+Preferences are stored at `%AppData%\LunarCookies\settings.json`. Saved servers
+are stored at `%AppData%\LunarCookies\servers.json`.
+
+If **Populate Lunar account manager** is enabled, Lunar Cookies writes the
+current Microsoft session into `%USERPROFILE%\.lunarclient\settings\game\accounts.json`
+using Lunar's own account-file fields, including the MSA refresh token when one
+is stored. Lunar reads that file at process start, so the client must be fully
+closed and relaunched after a write. Cookie-only accounts that have no refresh
+token may still be ignored. The setting is off by default.
 
 - Bridge log: `%TEMP%\lunar_cookies_bridge.log`
 - UI crash log: `%TEMP%\lunar_cookies_ui_crash.log`
