@@ -64,6 +64,13 @@ internal static class SmokeTests
             Expect(true, "Rejects garbage");
         }
 
+        Expect(OfflineAccount.ComputeOfflineUuid("Notch") == "b50ad385-829d-3141-a216-7e7d7539ba7f",
+            "Offline UUID matches nameUUIDFromBytes vector (Notch)");
+        Expect(OfflineAccount.TryCreate(" Notch ", out string _, out string offlineUuid, out _)
+            && offlineUuid == "b50ad385829d3141a2167e7d7539ba7f",
+            "Offline profile creation");
+        Expect(!OfflineAccount.TryCreate("bad name", out _, out _, out _), "Rejects invalid cracked username");
+
         string sampleDirectory = Path.Combine(Directory.GetCurrentDirectory(), "cookies");
         if (Directory.Exists(sampleDirectory))
         {

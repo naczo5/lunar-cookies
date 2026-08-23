@@ -29,6 +29,7 @@ static jmethodID g_joinServerMethod = nullptr;
 static jmethodID g_hintMethod = nullptr;
 static jmethodID g_hintConnectMethod = nullptr;
 static jobject g_gameClassLoader = nullptr;
+static std::vector<jobject> g_loaderCandidates;
 static CRITICAL_SECTION g_logCs;
 static bool g_logCsInit = false;
 
@@ -122,8 +123,13 @@ static jclass LoadClassWithLoader(JNIEnv* env, jobject cl, const char* dotName) 
     return result;
 }
 
-static bool DiscoverGameClassLoader(JNIEnv* env) {
-    if (g_gameClassLoader) return true;
+// Lunar (especially the ichor subsystem) uses multiple nested classloaders.
+// Picking the first interesting class' loader is unreliable — a Lunar-internal
+// lambda can hand back a loader whose view of net.minecraft classes lacks the
+// static singleton. Instead, collect every distinct candidate loader, ordered
+// so loaders of the actual Minecraft class are tried first.
+static bool DiscoverClassLoaderCandidates(JNIEnv* env) {
+    if (!g_loaderCandidates.empty()) return true;
     if (!g_jvm || !env) return false;
 
     jvmtiEnv* jvmti = nullptr;
@@ -141,36 +147,60 @@ static bool DiscoverGameClassLoader(JNIEnv* env) {
         Log(buf);
         return false;
     }
+    env->EnsureLocalCapacity(count > 128 ? count : 128);
 
-    jobject foundLoader = nullptr;
-    for (jint i = 0; i < count; i++) {
+    struct Candidate { jobject loader; int tier; std::string sig; };
+    std::vector<Candidate> found;
+
+    for (jint i = 0; i < count && found.size() < 16; i++) {
         char* sig = nullptr;
         if (jvmti->GetClassSignature(classes[i], &sig, nullptr) != JVMTI_ERROR_NONE) {
             env->DeleteLocalRef(classes[i]);
             continue;
         }
-        bool interesting = false;
+        int tier = -1;
         if (sig) {
-            if (strstr(sig, "net/minecraft/client/Minecraft")
-                || strcmp(sig, "Lave;") == 0
-                || strstr(sig, "net/minecraft/class_310")
-                || strstr(sig, "com/moonsworth/lunar")
-                || strstr(sig, "net/minecraft/util/Session")
-                || strstr(sig, "net/minecraft/client/session/Session")
-                || strstr(sig, "net/minecraft/client/User")
-                || strstr(sig, "net/minecraft/class_320")
-                || strstr(sig, "com/mojang/authlib")) {
-                interesting = true;
+            // Tier 0: the game class itself — its loader is the best bet.
+            if (strcmp(sig, "Lnet/minecraft/client/Minecraft;") == 0
+                || strcmp(sig, "Lnet/minecraft/client/MinecraftClient;") == 0
+                || strcmp(sig, "Lnet/minecraft/class_310;") == 0
+                || strcmp(sig, "Lave;") == 0) {
+                tier = 0;
+            }
+            // Tier 1: session/user class.
+            else if (strcmp(sig, "Lnet/minecraft/util/Session;") == 0
+                || strcmp(sig, "Lnet/minecraft/client/session/Session;") == 0
+                || strcmp(sig, "Lnet/minecraft/client/User;") == 0
+                || strcmp(sig, "Lnet/minecraft/class_320;") == 0
+                || strcmp(sig, "Lbhl;") == 0
+                || strcmp(sig, "Lbhm;") == 0) {
+                tier = 1;
+            }
+            // Tier 2: anything else game-adjacent (connect screens, authlib,
+            // Lunar internals) — kept as last-resort candidates only.
+            else if (strstr(sig, "ConnectScreen;")
+                || strstr(sig, "GuiConnecting;")
+                || strstr(sig, "com/mojang/authlib")
+                || strstr(sig, "com/moonsworth/lunar")) {
+                tier = 2;
             }
         }
-        if (interesting && !foundLoader) {
+
+        if (tier >= 0) {
             jobject loader = nullptr;
             if (jvmti->GetClassLoader(classes[i], &loader) == JVMTI_ERROR_NONE && loader) {
-                foundLoader = env->NewGlobalRef(loader);
+                bool duplicate = false;
+                for (Candidate& existing : found) {
+                    if (env->IsSameObject(existing.loader, loader)) {
+                        if (tier < existing.tier) existing.tier = tier;
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (!duplicate) {
+                    found.push_back(Candidate{ env->NewGlobalRef(loader), tier, sig });
+                }
                 env->DeleteLocalRef(loader);
-                char buf[256];
-                snprintf(buf, sizeof(buf), "Found game classloader via %s", sig ? sig : "?");
-                Log(buf);
             }
         }
         if (sig) jvmti->Deallocate((unsigned char*)sig);
@@ -178,11 +208,20 @@ static bool DiscoverGameClassLoader(JNIEnv* env) {
     }
     jvmti->Deallocate((unsigned char*)classes);
 
-    if (!foundLoader) {
-        Log("Game classloader not found yet");
+    std::stable_sort(found.begin(), found.end(),
+        [](const Candidate& a, const Candidate& b) { return a.tier < b.tier; });
+
+    for (Candidate& c : found) {
+        char buf[320];
+        snprintf(buf, sizeof(buf), "Candidate classloader (tier %d): %s", c.tier, c.sig.c_str());
+        Log(buf);
+        g_loaderCandidates.push_back(c.loader);
+    }
+
+    if (g_loaderCandidates.empty()) {
+        Log("No candidate classloaders found yet");
         return false;
     }
-    g_gameClassLoader = foundLoader;
     return true;
 }
 
@@ -275,28 +314,54 @@ static void DiscoverClassHints(JNIEnv* env, jvmtiEnv* jvmti) {
     }
 }
 
-static bool DefineHelper(JNIEnv* env) {
-    if (g_helperClass) return true;
-    if (!env) return false;
-    if (!DiscoverGameClassLoader(env)) return false;
+struct HelperMethods {
+    jmethodID init;
+    jmethodID setSession;
+    jmethodID restore;
+    jmethodID getInfo;
+    jmethodID joinServer;
+    jmethodID hint;
+    jmethodID hintConnect;
+};
+
+static bool CommitHelper(JNIEnv* env, jclass defined, const HelperMethods& methods, jobject loader) {
+    if (g_helperClass) env->DeleteGlobalRef(g_helperClass);
+    if (g_gameClassLoader) { env->DeleteGlobalRef(g_gameClassLoader); g_gameClassLoader = nullptr; }
+    g_helperClass = (jclass)env->NewGlobalRef(defined);
+    g_gameClassLoader = env->NewGlobalRef(loader);
+    g_initMethod = methods.init;
+    g_setSessionMethod = methods.setSession;
+    g_restoreMethod = methods.restore;
+    g_getInfoMethod = methods.getInfo;
+    g_joinServerMethod = methods.joinServer;
+    g_hintMethod = methods.hint;
+    g_hintConnectMethod = methods.hintConnect;
+    return g_helperClass != nullptr && g_gameClassLoader != nullptr;
+}
+
+// Defines the helper on one classloader and runs init() to prove the loader
+// can actually see the live Minecraft singleton. Returns:
+//   1 = defined, methods resolved, and init returned "ok"
+//   0 = defined and methods resolved, but init not ready yet
+//  -1 = define or method resolution failed on this loader
+static int TryLoader(JNIEnv* env, jobject cl, std::string& initResult) {
+    if (!env || !cl) return -1;
 
     jclass clClass = env->FindClass("java/lang/ClassLoader");
-    if (!clClass || env->ExceptionCheck()) { env->ExceptionClear(); return false; }
-
+    if (!clClass || env->ExceptionCheck()) { env->ExceptionClear(); return -1; }
     jmethodID defineClass = env->GetMethodID(clClass, "defineClass",
         "(Ljava/lang/String;[BII)Ljava/lang/Class;");
     if (env->ExceptionCheck()) { env->ExceptionClear(); defineClass = nullptr; }
     env->DeleteLocalRef(clClass);
-    if (!defineClass) return false;
+    if (!defineClass) return -1;
 
     jbyteArray ba = env->NewByteArray((jint)kSessionSwitcherClassLen);
-    if (!ba) { env->ExceptionClear(); return false; }
+    if (!ba) { env->ExceptionClear(); return -1; }
     env->SetByteArrayRegion(ba, 0, (jint)kSessionSwitcherClassLen,
                             reinterpret_cast<const jbyte*>(kSessionSwitcherClassBytes));
 
     jstring jname = env->NewStringUTF("com.lunarcookies.SessionSwitcher");
-    jclass defined = (jclass)env->CallObjectMethod(
-        g_gameClassLoader, defineClass, jname, ba, (jint)0, (jint)kSessionSwitcherClassLen);
+    jclass defined = (jclass)env->CallObjectMethod(cl, defineClass, jname, ba, (jint)0, (jint)kSessionSwitcherClassLen);
     if (env->ExceptionCheck()) {
         env->ExceptionClear(); // never ExceptionDescribe in injected process
         defined = nullptr;
@@ -305,46 +370,132 @@ static bool DefineHelper(JNIEnv* env) {
     env->DeleteLocalRef(ba);
 
     if (!defined)
-        defined = LoadClassWithLoader(env, g_gameClassLoader, "com.lunarcookies.SessionSwitcher");
-    if (!defined) {
-        Log("DefineClass(SessionSwitcher) failed");
-        return false;
-    }
+        defined = LoadClassWithLoader(env, cl, "com.lunarcookies.SessionSwitcher");
+    if (!defined) return -1;
 
-    g_helperClass = (jclass)env->NewGlobalRef(defined);
-    env->DeleteLocalRef(defined);
-
-    g_initMethod = env->GetStaticMethodID(g_helperClass, "init", "()Ljava/lang/String;");
-    g_setSessionMethod = env->GetStaticMethodID(g_helperClass, "setSession",
+    HelperMethods m;
+    m.init = env->GetStaticMethodID(defined, "init", "()Ljava/lang/String;");
+    m.setSession = env->GetStaticMethodID(defined, "setSession",
         "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
-    g_restoreMethod = env->GetStaticMethodID(g_helperClass, "restoreSession", "()Ljava/lang/String;");
-    g_getInfoMethod = env->GetStaticMethodID(g_helperClass, "getSessionInfo", "()Ljava/lang/String;");
-    g_joinServerMethod = env->GetStaticMethodID(g_helperClass, "joinServer",
+    m.restore = env->GetStaticMethodID(defined, "restoreSession", "()Ljava/lang/String;");
+    m.getInfo = env->GetStaticMethodID(defined, "getSessionInfo", "()Ljava/lang/String;");
+    m.joinServer = env->GetStaticMethodID(defined, "joinServer",
         "(Ljava/lang/String;I)Ljava/lang/String;");
-    g_hintMethod = env->GetStaticMethodID(g_helperClass, "hint",
-        "(Ljava/lang/String;Ljava/lang/String;)V");
-    g_hintConnectMethod = env->GetStaticMethodID(g_helperClass, "hintConnect",
+    m.hint = env->GetStaticMethodID(defined, "hint", "(Ljava/lang/String;Ljava/lang/String;)V");
+    m.hintConnect = env->GetStaticMethodID(defined, "hintConnect",
         "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
 
-    if (env->ExceptionCheck() || !g_initMethod || !g_setSessionMethod || !g_restoreMethod
-        || !g_getInfoMethod || !g_joinServerMethod || !g_hintMethod || !g_hintConnectMethod) {
+    bool resolved = !env->ExceptionCheck() && m.init && m.setSession && m.restore
+        && m.getInfo && m.joinServer && m.hint && m.hintConnect;
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (!resolved) {
+        env->DeleteLocalRef(defined);
+        return -1;
+    }
+
+    jstring r = (jstring)env->CallStaticObjectMethod(defined, m.init);
+    if (env->ExceptionCheck()) {
         env->ExceptionClear();
-        Log("Failed to resolve SessionSwitcher methods");
+        initResult = "init threw";
+    } else {
+        initResult = JStringToUtf8(env, r);
+        if (r) env->DeleteLocalRef(r);
+    }
+
+    int status = (initResult == "ok") ? 1 : 0;
+    if (status == 1) {
+        if (!CommitHelper(env, defined, m, cl)) status = -1;
+    }
+    env->DeleteLocalRef(defined);
+    return status;
+}
+
+static bool DefineHelper(JNIEnv* env) {
+    if (g_helperClass) return true;
+    if (!env) return false;
+    env->EnsureLocalCapacity(64);
+    if (!DiscoverClassLoaderCandidates(env)) return false;
+
+    jclass clProbe = env->FindClass("java/lang/ClassLoader");
+    env->DeleteLocalRef(clProbe); // availability probe only
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+
+    // First pass: only accept a loader whose init() reports full readiness.
+    std::string result;
+    for (size_t i = 0; i < g_loaderCandidates.size(); i++) {
+        result.clear();
+        int status = TryLoader(env, g_loaderCandidates[i], result);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "Loader %zu init => %s", i,
+                 result.empty() ? "<no result>" : result.c_str());
+        Log(buf);
+        if (status == 1) break;
+        if (i + 1 == g_loaderCandidates.size()) {
+            // No loader was ready yet. Fall back to the first loader that at
+            // least accepted the class definition so later retries (setSession
+            // re-runs init()) behave like before.
+            Log("No loader ready yet; committing first definable loader as fallback");
+            for (size_t j = 0; j < g_loaderCandidates.size(); j++) {
+                jclass clClass = env->FindClass("java/lang/ClassLoader");
+                if (!clClass || env->ExceptionCheck()) { env->ExceptionClear(); break; }
+                jmethodID defineClass = env->GetMethodID(clClass, "defineClass",
+                    "(Ljava/lang/String;[BII)Ljava/lang/Class;");
+                if (env->ExceptionCheck()) { env->ExceptionClear(); defineClass = nullptr; }
+                env->DeleteLocalRef(clClass);
+                if (!defineClass) break;
+
+                jbyteArray ba = env->NewByteArray((jint)kSessionSwitcherClassLen);
+                if (!ba) { env->ExceptionClear(); break; }
+                env->SetByteArrayRegion(ba, 0, (jint)kSessionSwitcherClassLen,
+                                        reinterpret_cast<const jbyte*>(kSessionSwitcherClassBytes));
+                jstring jname = env->NewStringUTF("com.lunarcookies.SessionSwitcher");
+                jclass defined = (jclass)env->CallObjectMethod(
+                    g_loaderCandidates[j], defineClass, jname, ba, (jint)0, (jint)kSessionSwitcherClassLen);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); defined = nullptr; }
+                env->DeleteLocalRef(jname);
+                env->DeleteLocalRef(ba);
+                if (!defined)
+                    defined = LoadClassWithLoader(env, g_loaderCandidates[j], "com.lunarcookies.SessionSwitcher");
+                if (!defined) continue;
+
+                HelperMethods m;
+                m.init = env->GetStaticMethodID(defined, "init", "()Ljava/lang/String;");
+                m.setSession = env->GetStaticMethodID(defined, "setSession",
+                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+                m.restore = env->GetStaticMethodID(defined, "restoreSession", "()Ljava/lang/String;");
+                m.getInfo = env->GetStaticMethodID(defined, "getSessionInfo", "()Ljava/lang/String;");
+                m.joinServer = env->GetStaticMethodID(defined, "joinServer",
+                    "(Ljava/lang/String;I)Ljava/lang/String;");
+                m.hint = env->GetStaticMethodID(defined, "hint", "(Ljava/lang/String;Ljava/lang/String;)V");
+                m.hintConnect = env->GetStaticMethodID(defined, "hintConnect",
+                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+                bool okMethods = !env->ExceptionCheck() && m.init && m.setSession && m.restore
+                    && m.getInfo && m.joinServer && m.hint && m.hintConnect;
+                if (env->ExceptionCheck()) env->ExceptionClear();
+                if (!okMethods) { env->DeleteLocalRef(defined); continue; }
+
+                bool committed = CommitHelper(env, defined, m, g_loaderCandidates[j]);
+                env->DeleteLocalRef(defined);
+                if (committed) {
+                    LogStr("Fallback loader committed: index " + std::to_string(j));
+                    jvmtiEnv* jvmti = nullptr;
+                    if (g_jvm->GetEnv((void**)&jvmti, JVMTI_VERSION_1_2) == JNI_OK && jvmti)
+                        DiscoverClassHints(env, jvmti);
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    if (!g_helperClass) {
+        Log("DefineClass(SessionSwitcher) failed on all loaders");
         return false;
     }
 
     jvmtiEnv* jvmti = nullptr;
     if (g_jvm->GetEnv((void**)&jvmti, JVMTI_VERSION_1_2) == JNI_OK && jvmti)
         DiscoverClassHints(env, jvmti);
-
-    jstring r = (jstring)env->CallStaticObjectMethod(g_helperClass, g_initMethod);
-    if (env->ExceptionCheck()) {
-        env->ExceptionClear();
-        Log("SessionSwitcher.init threw");
-    } else {
-        LogStr(std::string("SessionSwitcher.init => ") + JStringToUtf8(env, r));
-        if (r) env->DeleteLocalRef(r);
-    }
     return true;
 }
 

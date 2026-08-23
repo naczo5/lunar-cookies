@@ -11,7 +11,7 @@ public sealed class StoredAccount
     public string Uuid { get; set; } = "";
     public string AccessToken { get; set; } = "";
     public string RefreshToken { get; set; } = "";
-    public string Source { get; set; } = "unknown"; // localts | cookie
+    public string Source { get; set; } = "unknown"; // localts | cookie | offline
     public DateTimeOffset AddedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? LastUsedAt { get; set; }
 
@@ -19,7 +19,12 @@ public sealed class StoredAccount
     public bool HasRefresh => !string.IsNullOrWhiteSpace(RefreshToken);
 
     [JsonIgnore]
-    public string DisplayLabel => HasRefresh ? $"{Name}  (Localts)" : $"{Name}  (cookie)";
+    public bool IsOffline => string.Equals(Source, OfflineAccount.SourceName, StringComparison.OrdinalIgnoreCase);
+
+    [JsonIgnore]
+    public string DisplayLabel => IsOffline ? $"{Name}  (cracked)"
+        : HasRefresh ? $"{Name}  (Localts)"
+        : $"{Name}  (cookie)";
 }
 
 public sealed class AccountStore
@@ -72,9 +77,12 @@ public sealed class AccountStore
 
     public StoredAccount Upsert(MinecraftProfile profile, string source)
     {
+        // Offline entries are matched by UUID only so a cracked username can
+        // never overwrite a saved Microsoft/cookie account with the same name.
+        bool offline = string.Equals(source, OfflineAccount.SourceName, StringComparison.OrdinalIgnoreCase);
         var existing = _accounts.FirstOrDefault(a =>
-            string.Equals(a.Uuid, profile.Uuid, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(a.Name, profile.Name, StringComparison.OrdinalIgnoreCase));
+            SameUuid(a.Uuid, profile.Uuid)
+            || (!offline && string.Equals(a.Name, profile.Name, StringComparison.OrdinalIgnoreCase)));
 
         if (existing == null)
         {
@@ -91,6 +99,13 @@ public sealed class AccountStore
         Save();
         return existing;
     }
+
+    private static bool SameUuid(string? left, string? right) =>
+        !string.IsNullOrWhiteSpace(left)
+        && !string.IsNullOrWhiteSpace(right)
+        && left.Replace("-", "", StringComparison.Ordinal).Equals(
+            right.Replace("-", "", StringComparison.Ordinal),
+            StringComparison.OrdinalIgnoreCase);
 
     public void UpdateTokens(StoredAccount account, MinecraftProfile profile)
     {

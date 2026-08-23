@@ -1,5 +1,9 @@
 # Lunar Cookie Account Switcher
 
+![Release](https://img.shields.io/github/v/release/naczo5/lunar-cookies?style=flat-square&label=release)
+![Downloads](https://img.shields.io/github/downloads/naczo5/lunar-cookies/total?style=flat-square&label=downloads)
+![License](https://img.shields.io/github/license/naczo5/lunar-cookies?style=flat-square&label=license)
+
 A portable WinUI 3 account switcher for multiple Minecraft Java clients. It
 supports Localts refresh tokens (`M.C…`) and Netscape or cookie-header
 Microsoft session cookies.
@@ -110,6 +114,34 @@ Netscape-format cookie exports, including files named after the account
 username, are supported. Cookie filenames do not affect parsing. Cookie
 authentication follows Microsoft/Xbox redirects while preserving domain-scoped
 cookies and response cookie updates.
+
+## Cracked accounts
+
+**Add cracked** creates an offline-mode profile from a username alone — no
+Microsoft account, cookies, or tokens required:
+
+1. Click **Add cracked** on the Accounts tab and enter a Minecraft username
+   (3–16 characters of letters, numbers, and underscores; invalid names are
+   rejected).
+2. Select the card and click **Use account** like any other account. The bridge
+   swaps in the session without touching Microsoft authentication.
+3. Offline profiles are tagged **Cracked** on their cards and are matched by
+   UUID when importing, so the same name can coexist with a premium account.
+
+The UUID is derived with Minecraft's standard offline convention — a v3 (MD5)
+UUID over `"OfflinePlayer:" + name` — so offline-mode servers and plugins that
+compute UUIDs the same way recognize the account consistently. The access token
+is the conventional `"0"` placeholder; offline servers never validate it.
+
+Limitations:
+
+- Cracked sessions only work on servers running in `online-mode=false`. Any
+  online server or the Mojang session services will reject them.
+- If **Populate Lunar account manager** is enabled, cracked entries are written
+  to Lunar's `accounts.json`, but Lunar expects Microsoft credentials and may
+  reject or overwrite them on relaunch.
+- **Restore launch account** always restores the session Lunar was launched
+  with, never a cracked session.
 
 By default, minimizing the window moves Lunar Cookies to the notification area;
 double-click its tray icon to restore it. The app also exits after a previously

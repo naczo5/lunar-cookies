@@ -128,6 +128,27 @@ var tests = new (string Name, Action Run)[]
         string token = FakeJwt(("xuid", "2535443995591896"), ("exp", "1786969129"));
         Assert(LunarAccountManager.TryReadJwtString(token, "xuid") == "2535443995591896");
         Assert(LunarAccountManager.TryReadJwtExpiry(token) == DateTimeOffset.FromUnixTimeSeconds(1786969129));
+    }),
+    ("Offline UUID matches nameUUIDFromBytes vectors", () =>
+    {
+        Assert(OfflineAccount.ComputeOfflineUuid("Notch") == "b50ad385-829d-3141-a216-7e7d7539ba7f");
+        Assert(OfflineAccount.ComputeOfflineUuid("Player_1") == "914e9094-dd43-376a-a052-b63bf94389aa");
+    }),
+    ("Offline profile creation", () =>
+    {
+        Assert(OfflineAccount.TryCreate(" Notch ", out string name, out string uuid, out string error));
+        Assert(error == "");
+        Assert(name == "Notch");
+        Assert(uuid == "b50ad385829d3141a2167e7d7539ba7f");
+    }),
+    ("Reject invalid cracked usernames", () =>
+    {
+        foreach (string? bad in new[] { null, "", "  ", "ab", "thisusernameiswaytoolong", "bad name", "bad-name", "pl@yer" })
+        {
+            Assert(!OfflineAccount.TryCreate(bad, out _, out _, out _));
+        }
+        Assert(OfflineAccount.IsValidName("okname"));
+        Assert(!OfflineAccount.IsValidName(null));
     })
 };
 

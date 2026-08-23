@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\LunarCookies\Core\CookieParser.cs" Link="CookieParser.cs" />
+    <Compile Include="..\LunarCookies\Core\OfflineAccount.cs" Link="OfflineAccount.cs" />
     <Compile Include="..\LunarCookies\Core\MinecraftServerAddress.cs" Link="MinecraftServerAddress.cs" />
     <Compile Include="..\LunarCookies\Core\LunarAccountManager.cs" Link="LunarAccountManager.cs" />
     <Compile Include="..\LunarCookies\Core\ServerPing.cs" Link="ServerPing.cs" />

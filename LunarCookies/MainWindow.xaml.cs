@@ -287,13 +287,29 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            Log($"Authenticating {account.Name}…");
+            Log(account.IsOffline
+                ? $"Preparing cracked session {account.Name}…"
+                : $"Authenticating {account.Name}…");
             MinecraftProfile profile;
             try
             {
-                profile = account.HasRefresh
-                    ? await CookieAuth.ProfileFromRefreshTokenAsync(account.RefreshToken, _lifetime.Token)
-                    : await CookieAuth.ProfileFromAccessTokenAsync(account.AccessToken, _lifetime.Token);
+                if (account.IsOffline)
+                {
+                    if (!OfflineAccount.TryCreate(account.Name, out string offlineName, out string offlineUuid,
+                            out string offlineError))
+                    {
+                        Log($"Cracked account {account.Name} is invalid: {offlineError}");
+                        ShowNotice("Invalid cracked account", offlineError, InfoBarSeverity.Error);
+                        return;
+                    }
+                    profile = new MinecraftProfile(offlineName, offlineUuid, OfflineAccount.OfflineToken);
+                }
+                else
+                {
+                    profile = account.HasRefresh
+                        ? await CookieAuth.ProfileFromRefreshTokenAsync(account.RefreshToken, _lifetime.Token)
+                        : await CookieAuth.ProfileFromAccessTokenAsync(account.AccessToken, _lifetime.Token);
+                }
             }
             catch (CookieAuthException ex)
             {
@@ -318,8 +334,18 @@ public sealed partial class MainWindow : Window
             _currentSessionUuid = result.Uuid;
             ReloadAccounts(account.Id);
             await RefreshSessionUiAsync();
-            Log($"Switched to {result.Username}. Join from the Servers tab, or open multiplayer in Lunar.");
-            ShowNotice("Account ready", $"Minecraft is now using {result.Username}.", InfoBarSeverity.Success);
+            if (account.IsOffline)
+            {
+                Log($"Switched to cracked session {result.Username}. Only offline-mode servers will accept this account.");
+                ShowNotice("Cracked session ready",
+                    $"Minecraft is now using {result.Username} (offline). Use the Servers tab to join offline-mode servers.",
+                    InfoBarSeverity.Success);
+            }
+            else
+            {
+                Log($"Switched to {result.Username}. Join from the Servers tab, or open multiplayer in Lunar.");
+                ShowNotice("Account ready", $"Minecraft is now using {result.Username}.", InfoBarSeverity.Success);
+            }
             TryPopulateLunarAccount(profile, setActive: true);
         });
     }
@@ -543,6 +569,66 @@ public sealed partial class MainWindow : Window
         input.Text = "";
         if (result == ContentDialogResult.Primary)
             await ImportAccountTextAsync(text);
+    }
+
+    private async void AddCracked_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy)
+            return;
+
+        var input = new TextBox
+        {
+            PlaceholderText = "Username (3-16 letters, numbers, underscores)",
+            MaxLength = 16
+        };
+
+        ContentDialog dialog = new()
+        {
+            XamlRoot = RootLayout.XamlRoot,
+            Title = "Add cracked account",
+            Content = new StackPanel
+            {
+                Spacing = 10,
+                Children =
+                {
+                    input,
+                    new TextBlock
+                    {
+                        TextWrapping = TextWrapping.Wrap,
+                        Foreground = new SolidColorBrush(Colors.Orange),
+                        Text = "Cracked accounts are usernames only and work exclusively on offline-mode servers."
+                    }
+                }
+            },
+            PrimaryButtonText = "Save",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+
+        ContentDialogResult dialogResult = await dialog.ShowAsync();
+        if (dialogResult != ContentDialogResult.Primary)
+            return;
+
+        await RunBusyAsync(() =>
+        {
+            if (!OfflineAccount.TryCreate(input.Text, out string crackedName, out string crackedUuid, out string error))
+            {
+                Log($"Cracked account rejected: {error}");
+                ShowNotice("Invalid username", error, InfoBarSeverity.Error);
+                return Task.CompletedTask;
+            }
+
+            MinecraftProfile profile = new(crackedName, crackedUuid, OfflineAccount.OfflineToken);
+            StoredAccount stored = _store.Upsert(profile, OfflineAccount.SourceName);
+            ReloadAccounts(stored.Id);
+            Log($"Saved cracked account {profile.Name} ({crackedUuid}).");
+            TryPopulateLunarAccount(profile, setActive: true);
+            Log("Note: Lunar's account manager expects Microsoft credentials and may reject or overwrite cracked entries.");
+            ShowNotice("Cracked account saved",
+                $"{profile.Name} was added. Use the Servers tab to join offline-mode servers.",
+                InfoBarSeverity.Success);
+            return Task.CompletedTask;
+        });
     }
 
     private async Task<bool> ImportAccountTextAsync(string text)

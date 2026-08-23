@@ -32,7 +32,7 @@ public sealed class AccountCardViewModel : INotifyPropertyChanged
         }
     }
 
-    public string SourceLabel => Account.HasRefresh ? "Localts" : "Cookie";
+    public string SourceLabel => Account.IsOffline ? "Cracked" : Account.HasRefresh ? "Localts" : "Cookie";
     public string LastUsedLabel => Account.LastUsedAt is { } used
         ? $"Used {FormatRelative(used)}"
         : $"Added {FormatRelative(Account.AddedAt)}";
