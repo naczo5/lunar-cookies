@@ -50,6 +50,7 @@ public sealed partial class MainWindow : Window
         ViewModel.MinimizeToTray = _settings.MinimizeToTray;
         ViewModel.ExitWhenMinecraftCloses = _settings.ExitWhenMinecraftCloses;
         ViewModel.PopulateLunarAccountManager = _settings.PopulateLunarAccountManager;
+        ViewModel.AutoUnlockCosmetics = _settings.AutoUnlockCosmetics;
         ConfigureWindow();
         ConfigureTrayIcon();
 
@@ -156,12 +157,16 @@ public sealed partial class MainWindow : Window
         string? tag = (args.SelectedItemContainer as NavigationViewItem)?.Tag?.ToString();
         bool accounts = tag == "accounts" || string.IsNullOrEmpty(tag);
         bool servers = tag == "servers";
+        bool cosmetics = tag == "cosmetics";
         bool injection = tag == "injection";
         AccountsPage.Visibility = accounts ? Visibility.Visible : Visibility.Collapsed;
         ServersPage.Visibility = servers ? Visibility.Visible : Visibility.Collapsed;
+        CosmeticsPage.Visibility = cosmetics ? Visibility.Visible : Visibility.Collapsed;
         InjectionPage.Visibility = injection ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility = tag == "settings" ? Visibility.Visible : Visibility.Collapsed;
 
+        if (cosmetics && _injector.Bridge.IsConnected)
+            _ = RefreshCosmeticsStatusAsync();
         if (injection)
             RefreshProcessStatus();
         if (servers && ViewModel.HasServers)
@@ -255,6 +260,17 @@ public sealed partial class MainWindow : Window
             : $"{info.Username} · {(info.InWorld ? "in world" : "menu")}";
         ViewModel.MarkCurrentAccount(info.Uuid);
         Log($"Current session: {info.Username} uuid={info.Uuid} inWorld={info.InWorld} ready={info.Ready}");
+
+        ViewModel.IsCosmeticsUnlocked = info.CosmeticsPatched;
+        if (info.CosmeticsPatched)
+        {
+            ViewModel.CosmeticsStatus = "Unlocked";
+            ViewModel.CosmeticsDetails = "All Lunar Client cosmetics, badges, emotes, and sprays are active.";
+        }
+        else if (_settings.AutoUnlockCosmetics && _injector.Bridge.IsConnected)
+        {
+            _ = AutoUnlockCosmeticsAsync();
+        }
     }
 
     private async void UseAccount_Click(object sender, RoutedEventArgs e)
@@ -1038,6 +1054,7 @@ public sealed partial class MainWindow : Window
         _settings.MinimizeToTray = ViewModel.MinimizeToTray;
         _settings.ExitWhenMinecraftCloses = ViewModel.ExitWhenMinecraftCloses;
         _settings.PopulateLunarAccountManager = ViewModel.PopulateLunarAccountManager;
+        _settings.AutoUnlockCosmetics = ViewModel.AutoUnlockCosmetics;
         try
         {
             _settingsStore.Save(_settings);
@@ -1180,6 +1197,131 @@ public sealed partial class MainWindow : Window
                 SetBusy(false);
                 SyncConnectionStatus();
             }
+        }
+    }
+
+    private async void PatchCosmetics_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy)
+            return;
+
+        await RunBusyAsync(async () =>
+        {
+            if (!_injector.Bridge.IsConnected)
+            {
+                Log("Not connected — injecting before unlocking cosmetics.");
+                if (!await _injector.InjectAsync(Log, _lifetime.Token))
+                {
+                    SyncConnectionStatus();
+                    ShowNotice("Injection failed", _injector.Status, InfoBarSeverity.Error);
+                    return;
+                }
+                SyncConnectionStatus();
+            }
+
+            Log("Patching Lunar Client cosmetics services…");
+            BridgeCosmeticsResult? result = await _injector.Bridge.PatchCosmeticsAsync(_lifetime.Token);
+            if (result == null)
+            {
+                Log("Cosmetics patch failed: bridge did not respond.");
+                ShowNotice("Cosmetics patch failed", "The bridge did not respond.", InfoBarSeverity.Warning);
+                return;
+            }
+
+            if (result.Ok)
+            {
+                ViewModel.IsCosmeticsUnlocked = true;
+                ViewModel.CosmeticsStatus = "Unlocked";
+                ViewModel.CosmeticsDetails = string.IsNullOrWhiteSpace(result.Message)
+                    ? "All cosmetics, badges, emotes, and sprays unlocked."
+                    : result.Message;
+                Log($"Cosmetics unlocked: {ViewModel.CosmeticsDetails}");
+                ShowNotice("Cosmetics Unlocked", "All cosmetics, cloaks, emotes, badges, and sprays are now unlocked!", InfoBarSeverity.Success);
+            }
+            else
+            {
+                string err = string.IsNullOrWhiteSpace(result.Error) ? "Lunar services not found or already patched" : result.Error;
+                Log($"Cosmetics patch notice: {err}");
+                ShowNotice("Cosmetics unlock notice", err, InfoBarSeverity.Warning);
+            }
+        });
+    }
+
+    private async void RefreshCosmeticsStatus_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy)
+            return;
+
+        await RunBusyAsync(async () =>
+        {
+            if (!_injector.Bridge.IsConnected)
+            {
+                ShowNotice("Not connected", "Inject or connect the bridge to check status.", InfoBarSeverity.Warning);
+                return;
+            }
+            await RefreshCosmeticsStatusAsync();
+        });
+    }
+
+    private async Task RefreshCosmeticsStatusAsync()
+    {
+        BridgeCosmeticsResult? result = await _injector.Bridge.GetCosmeticsStatusAsync(_lifetime.Token);
+        if (result != null && result.Ok)
+        {
+            ViewModel.IsCosmeticsUnlocked = result.CosmeticsPatched;
+            ViewModel.CosmeticsStatus = result.CosmeticsPatched ? "Unlocked" : "Not patched";
+            ViewModel.CosmeticsDetails = string.IsNullOrWhiteSpace(result.Message)
+                ? (result.CosmeticsPatched ? "Cosmetics services unlocked." : "Not patched.")
+                : result.Message;
+        }
+    }
+
+    private async Task AutoUnlockCosmeticsAsync()
+    {
+        try
+        {
+            BridgeCosmeticsResult? result = await _injector.Bridge.PatchCosmeticsAsync(_lifetime.Token);
+            if (result != null && result.Ok)
+            {
+                ViewModel.IsCosmeticsUnlocked = true;
+                ViewModel.CosmeticsStatus = "Unlocked";
+                ViewModel.CosmeticsDetails = string.IsNullOrWhiteSpace(result.Message)
+                    ? "All cosmetics, badges, emotes, and sprays unlocked."
+                    : result.Message;
+                Log($"Auto-unlocked cosmetics: {ViewModel.CosmeticsDetails}");
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log($"Auto-unlock cosmetics notice: {ex.Message}");
+        }
+    }
+
+    private void OpenSavedCosmeticsFolder_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            string mcDir = Path.Combine(appData, ".minecraft", "prometheus", "saved");
+            string localDir = Path.Combine(Environment.CurrentDirectory, "prometheus", "saved");
+
+            string targetDir = Directory.Exists(mcDir) ? mcDir : (Directory.Exists(localDir) ? localDir : mcDir);
+            if (!Directory.Exists(targetDir))
+            {
+                Directory.CreateDirectory(targetDir);
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = targetDir,
+                UseShellExecute = true,
+                Verb = "open"
+            });
+        }
+        catch (Exception ex)
+        {
+            Log($"Failed to open folder: {ex.Message}");
+            ShowNotice("Failed to open folder", ex.Message, InfoBarSeverity.Warning);
         }
     }
 

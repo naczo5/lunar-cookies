@@ -33,6 +33,9 @@ bridge will not write to a guessed field.
 - **Accounts** displays saved accounts in a three-column card grid. Select a
   card and use the bottom bar to switch, restore the account Lunar launched
   with, or delete the saved credentials.
+- **Cosmetics** unlocks all cloaks, wings, emotes, badges, and cosmetics in
+  Lunar Client's wardrobe. Re-patches in-memory RPC stubs and manages local
+  outfit persistence.
 - **Servers** lists saved Minecraft servers and a direct-connect field. Join
   uses Minecraft's own connect path, so Lunar's Microsoft-account menu is not
   required. Saved servers can be pinged for latency, player counts, and MOTD.
@@ -43,10 +46,10 @@ bridge will not write to a guessed field.
   HTTP status without logging cookies, tokens, or response bodies.
 - **Injection** contains bridge connection controls, current Lunar session
   details, process detection, and the diagnostic log.
-- **Settings** controls minimize-to-tray behavior, whether the switcher exits
-  automatically after the detected Minecraft process closes, and an optional
-  attempt to populate Lunar Client's local account manager. That last setting
-  is off by default.
+- **Settings** controls minimize-to-tray behavior, automatic cosmetic unlocking
+  on injection or switch, whether the switcher exits automatically after the
+  detected Minecraft process closes, and an optional attempt to populate Lunar
+  Client's local account manager. That last setting is off by default.
 - Switching accounts automatically injects or reconnects the bridge when
   needed. Switching and restoration are blocked while Lunar is in a world or
   connected to a server.
@@ -174,6 +177,22 @@ instances before switching accounts.
 The local security model and private vulnerability reporting instructions are
 documented in [SECURITY.md](SECURITY.md).
 
+## Cosmetics unlocker
+
+Lunar Cookies includes an in-memory cosmetic unlocker for Lunar Client:
+
+- **Wardrobe access**: Unlocks all cloaks, wings, emotes, badges, and cosmetic
+  accessories directly inside Lunar Client's native wardrobe screen.
+- **In-memory patching**: Dynamically redefines Lunar Client's gRPC stubs
+  (`CosmeticService`, `BadgeService`, `EmoteService`, `SprayService`) in JVM
+  memory via the native JVMTI bridge without modifying game files on disk.
+- **Local persistence**: Outfits, equipped emotes, sprays, and badges are saved
+  locally to `%APPDATA%\.minecraft\prometheus\saved\` and restored on subsequent
+  game launches.
+- **Auto-unlock**: Can be triggered manually from the **Cosmetics** tab or set
+  to unlock automatically whenever the bridge connects or an account is switched
+  via **Settings**.
+
 ## Compatibility design
 
 - The UI selects only a positively identified Minecraft/Lunar Java window; it
@@ -191,6 +210,11 @@ documented in [SECURITY.md](SECURITY.md).
 
 Constructor ABI smoke coverage is in
 `JavaHelper/SessionSwitcherCompatibilityTest.java`.
+
+## Credits and acknowledgments
+
+- Foundational cookie parsing and authentication flows originated from [In-Game Account Switcher](https://github.com/VidTu/In-Game-Account-Switcher) by The_Fireplace and VidTu.
+- Cosmetics unlocking logic, RPC protobuf response schemas, and local outfit persistence architecture are adapted from the [Prometheus](https://github.com/prometheusreengineering/minecraft-lunar) patch by [prometheusreengineering](https://github.com/prometheusreengineering).
 
 ## License
 

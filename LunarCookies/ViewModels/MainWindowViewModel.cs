@@ -104,6 +104,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool _minimizeToTray = true;
     private bool _exitWhenMinecraftCloses = true;
     private bool _populateLunarAccountManager;
+    private bool _isCosmeticsUnlocked;
+    private string _cosmeticsStatus = "Not patched";
+    private string _cosmeticsDetails = "Lunar Client websocket services have not been patched yet.";
+    private bool _autoUnlockCosmetics = true;
 
     public ObservableCollection<AccountCardViewModel> Accounts { get; } = new();
     public ObservableCollection<ServerCardViewModel> Servers { get; } = new();
@@ -179,12 +183,28 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         get => _populateLunarAccountManager;
         set => SetField(ref _populateLunarAccountManager, value);
     }
+    public bool IsCosmeticsUnlocked
+    {
+        get => _isCosmeticsUnlocked;
+        set
+        {
+            if (SetField(ref _isCosmeticsUnlocked, value))
+            {
+                OnPropertyChanged(nameof(CosmeticsBadgeText));
+            }
+        }
+    }
+    public string CosmeticsStatus { get => _cosmeticsStatus; set => SetField(ref _cosmeticsStatus, value); }
+    public string CosmeticsDetails { get => _cosmeticsDetails; set => SetField(ref _cosmeticsDetails, value); }
+    public bool AutoUnlockCosmetics { get => _autoUnlockCosmetics; set => SetField(ref _autoUnlockCosmetics, value); }
+    public string CosmeticsBadgeText => IsCosmeticsUnlocked ? "Unlocked & Active" : "Not Unlocked";
 
     public bool IsNotBusy => !IsBusy;
     public bool CanUseAccount => !IsBusy && SelectedAccount != null;
     public bool CanDeleteAccount => !IsBusy && SelectedAccount != null;
     public bool CanRestore => !IsBusy && IsConnected;
     public bool CanDisconnect => !IsBusy && IsConnected;
+    public bool CanPatchCosmetics => !IsBusy;
     public bool CanJoinDirect => !IsBusy && !string.IsNullOrWhiteSpace(DirectConnectAddress);
     public bool CanJoinSelectedServer => !IsBusy && SelectedServer != null;
     public bool CanDeleteServer => !IsBusy && SelectedServer != null;
@@ -245,6 +265,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         CurrentUsername = "—";
         CurrentUuid = "—";
         WorldStatus = "Unknown";
+        IsCosmeticsUnlocked = false;
+        CosmeticsStatus = "Bridge disconnected";
+        CosmeticsDetails = "Connect to Lunar Client to view cosmetics unlock status.";
         MarkCurrentAccount(null);
     }
 
@@ -260,6 +283,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanDeleteAccount));
         OnPropertyChanged(nameof(CanRestore));
         OnPropertyChanged(nameof(CanDisconnect));
+        OnPropertyChanged(nameof(CanPatchCosmetics));
         OnPropertyChanged(nameof(CanJoinDirect));
         OnPropertyChanged(nameof(CanJoinSelectedServer));
         OnPropertyChanged(nameof(CanDeleteServer));

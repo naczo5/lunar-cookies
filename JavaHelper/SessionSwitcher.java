@@ -1,13 +1,24 @@
 package com.lunarcookies;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -41,6 +52,10 @@ public final class SessionSwitcher {
     private static String hintedServerAddressClass;
     private static String hintedServerDataClass;
     private static volatile boolean ready;
+    private static volatile boolean cosmeticsPatched;
+    private static String cosmeticsStatusDetails = "Not patched";
+
+    public static native boolean nativeRedefineClass(Class<?> targetClass, byte[] classBytes);
 
     private SessionSwitcher() {}
 
@@ -107,6 +122,7 @@ public final class SessionSwitcher {
             }
 
             ready = true;
+            try { patchCosmetics(); } catch (Throwable ignored) {}
             return "ok";
         } catch (Throwable t) {
             ready = false;
@@ -214,12 +230,12 @@ public final class SessionSwitcher {
 
     public static synchronized String getSessionInfo() {
         String initResult = init();
-        if (!ready) return "error|" + initResult + "|false|false";
+        if (!ready) return "error|" + initResult + "|false|false|" + (cosmeticsPatched ? "true" : "false");
         try {
             return "ok|" + readUsername() + "|" + readUuid() + "|"
-                    + isInWorld() + "|true";
+                    + isInWorld() + "|true|" + (cosmeticsPatched ? "true" : "false");
         } catch (Throwable t) {
-            return "error|" + describeThrowable(t) + "|false|false";
+            return "error|" + describeThrowable(t) + "|false|false|" + (cosmeticsPatched ? "true" : "false");
         }
     }
 
@@ -961,5 +977,1555 @@ public final class SessionSwitcher {
 
     private static boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    // =========================================================
+    // Lunar Client Cosmetics, Badges, Emotes & Sprays Unlocker
+    // =========================================================
+
+    public static synchronized boolean isCosmeticsPatched() {
+        return cosmeticsPatched;
+    }
+
+    public static synchronized String getCosmeticsStatus() {
+        return cosmeticsStatusDetails;
+    }
+
+    private static File getSavedDir() {
+        // Priority 1: Check existing prometheus/saved in .minecraft
+        String appdata = System.getenv("APPDATA");
+        if (appdata != null && !appdata.trim().isEmpty()) {
+            File mcDir = new File(new File(appdata, ".minecraft"), "prometheus" + File.separator + "saved");
+            if (mcDir.exists()) return mcDir;
+        }
+
+        // Priority 2: Check current working directory prometheus/saved
+        File cwdDir = new File("prometheus", "saved");
+        if (cwdDir.exists()) return cwdDir;
+
+        // Priority 3: Create %APPDATA%/.minecraft/prometheus/saved by default
+        if (appdata != null && !appdata.trim().isEmpty()) {
+            File mcDir = new File(new File(appdata, ".minecraft"), "prometheus" + File.separator + "saved");
+            if (mcDir.mkdirs() || mcDir.exists()) return mcDir;
+        }
+
+        cwdDir.mkdirs();
+        return cwdDir;
+    }
+
+    private static File getSavedFile(String name) {
+        return new File(getSavedDir(), name);
+    }
+
+    private static ClassLoader findLunarClassLoader() {
+        ClassLoader cl = SessionSwitcher.class.getClassLoader();
+        if (canLoadCosmetics(cl)) return cl;
+
+        ClassLoader ccl = Thread.currentThread().getContextClassLoader();
+        if (canLoadCosmetics(ccl)) return ccl;
+
+        try {
+            Object wsClient = findWebSocketClient(cl != null ? cl : ccl);
+            if (wsClient != null && canLoadCosmetics(wsClient.getClass().getClassLoader())) {
+                return wsClient.getClass().getClassLoader();
+            }
+        } catch (Throwable ignored) {}
+
+        try {
+            ThreadGroup rootGroup = Thread.currentThread().getThreadGroup();
+            while (rootGroup.getParent() != null) rootGroup = rootGroup.getParent();
+            Thread[] threads = new Thread[rootGroup.activeCount() + 64];
+            int count = rootGroup.enumerate(threads, true);
+            for (int i = 0; i < count; i++) {
+                Thread t = threads[i];
+                if (t != null) {
+                    ClassLoader tcl = t.getContextClassLoader();
+                    if (canLoadCosmetics(tcl)) return tcl;
+                    ClassLoader lcl = t.getClass().getClassLoader();
+                    if (canLoadCosmetics(lcl)) return lcl;
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        return cl != null ? cl : ClassLoader.getSystemClassLoader();
+    }
+
+    private static boolean canLoadCosmetics(ClassLoader cl) {
+        if (cl == null) return false;
+        try {
+            cl.loadClass("com.lunarclient.websocket.cosmetic.v2.CosmeticService$Stub");
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static void ensureSavedFiles(ClassLoader cl) {
+        try {
+            File outfitFile = getSavedFile("outfit.bin");
+            if (!outfitFile.exists() || outfitFile.length() == 0) {
+                Object defaultOutfit = readSavedOutfit(cl);
+                if (defaultOutfit != null) {
+                    writeSavedOutfit(defaultOutfit);
+                } else {
+                    if (outfitFile.getParentFile() != null) outfitFile.getParentFile().mkdirs();
+                    if (!outfitFile.exists()) {
+                        FileOutputStream fos = new FileOutputStream(outfitFile);
+                        fos.close();
+                    }
+                }
+            }
+            File badgeFile = getSavedFile("badge.bin");
+            if (!badgeFile.exists() || badgeFile.length() == 0) {
+                writeSavedBadge(0);
+            }
+            File emotesFile = getSavedFile("emotes.bin");
+            if (!emotesFile.exists() || emotesFile.length() == 0) {
+                writeSavedEquippedEmotes(new ArrayList<Object>());
+            }
+            File spraysFile = getSavedFile("sprays.bin");
+            if (!spraysFile.exists() || spraysFile.length() == 0) {
+                writeSavedEquippedSprays(new ArrayList<Object>());
+            }
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Error ensuring saved files: " + t);
+        }
+    }
+
+    public static synchronized String patchCosmetics() {
+        try {
+            ClassLoader cl = findLunarClassLoader();
+            System.out.println("[LunarCookies] Using classloader for cosmetics: " + cl);
+
+            // Ensure initial default save files exist in prometheus/saved/
+            ensureSavedFiles(cl);
+
+            int patchedCount = 0;
+            List<String> patchedNames = new ArrayList<String>();
+
+            // 1. CosmeticService$Stub
+            try {
+                Class<?> cosmeticStubClass = cl.loadClass("com.lunarclient.websocket.cosmetic.v2.CosmeticService$Stub");
+                byte[] rawBytes = loadClassBytes(cl, "com/lunarclient/websocket/cosmetic/v2/CosmeticService$Stub.class");
+                if (rawBytes != null) {
+                    byte[] patchedBytes = patchStubClassBytes(rawBytes, "com/lunarcookies/SessionSwitcher", new String[][]{
+                        {"login", "(Lcom/google/protobuf/RpcController;Lcom/lunarclient/websocket/cosmetic/v2/LoginRequest;Lcom/google/protobuf/RpcCallback;)V", "handleCosmeticLogin"},
+                        {"updateOutfit", "(Lcom/google/protobuf/RpcController;Lcom/lunarclient/websocket/cosmetic/v2/UpdateOutfitRequest;Lcom/google/protobuf/RpcCallback;)V", "handleUpdateOutfit"}
+                    });
+                    boolean ok = patchedBytes != null && nativeRedefineClass(cosmeticStubClass, patchedBytes);
+                    System.out.println("[LunarCookies] CosmeticService$Stub redefinition result: " + ok);
+                    if (ok) {
+                        patchedCount++;
+                        patchedNames.add("Cosmetics");
+                    }
+                } else {
+                    System.err.println("[LunarCookies] loadClassBytes failed for CosmeticService$Stub");
+                }
+            } catch (Throwable t) {
+                System.err.println("[LunarCookies] Error patching CosmeticService$Stub: " + t);
+            }
+
+            // 2. BadgeService$Stub
+            try {
+                Class<?> badgeStubClass = cl.loadClass("com.lunarclient.websocket.badge.v1.BadgeService$Stub");
+                byte[] rawBytes = loadClassBytes(cl, "com/lunarclient/websocket/badge/v1/BadgeService$Stub.class");
+                if (rawBytes != null) {
+                    byte[] patchedBytes = patchStubClassBytes(rawBytes, "com/lunarcookies/SessionSwitcher", new String[][]{
+                        {"login", "(Lcom/google/protobuf/RpcController;Lcom/lunarclient/websocket/badge/v1/LoginRequest;Lcom/google/protobuf/RpcCallback;)V", "handleBadgeLogin"},
+                        {"equipBadge", "(Lcom/google/protobuf/RpcController;Lcom/lunarclient/websocket/badge/v1/EquipBadgeRequest;Lcom/google/protobuf/RpcCallback;)V", "handleEquipBadge"}
+                    });
+                    boolean ok = patchedBytes != null && nativeRedefineClass(badgeStubClass, patchedBytes);
+                    System.out.println("[LunarCookies] BadgeService$Stub redefinition result: " + ok);
+                    if (ok) {
+                        patchedCount++;
+                        patchedNames.add("Badges");
+                    }
+                } else {
+                    System.err.println("[LunarCookies] loadClassBytes failed for BadgeService$Stub");
+                }
+            } catch (Throwable t) {
+                System.err.println("[LunarCookies] Error patching BadgeService$Stub: " + t);
+            }
+
+            // 3. EmoteService$Stub
+            try {
+                Class<?> emoteStubClass = cl.loadClass("com.lunarclient.websocket.emote.v1.EmoteService$Stub");
+                byte[] rawBytes = loadClassBytes(cl, "com/lunarclient/websocket/emote/v1/EmoteService$Stub.class");
+                if (rawBytes != null) {
+                    byte[] patchedBytes = patchStubClassBytes(rawBytes, "com/lunarcookies/SessionSwitcher", new String[][]{
+                        {"login", "(Lcom/google/protobuf/RpcController;Lcom/lunarclient/websocket/emote/v1/LoginRequest;Lcom/google/protobuf/RpcCallback;)V", "handleEmoteLogin"},
+                        {"useEmote", "(Lcom/google/protobuf/RpcController;Lcom/lunarclient/websocket/emote/v1/UseEmoteRequest;Lcom/google/protobuf/RpcCallback;)V", "handleUseEmote"},
+                        {"updateEquippedEmotes", "(Lcom/google/protobuf/RpcController;Lcom/lunarclient/websocket/emote/v1/UpdateEquippedEmotesRequest;Lcom/google/protobuf/RpcCallback;)V", "handleUpdateEquippedEmotes"}
+                    });
+                    boolean ok = patchedBytes != null && nativeRedefineClass(emoteStubClass, patchedBytes);
+                    System.out.println("[LunarCookies] EmoteService$Stub redefinition result: " + ok);
+                    if (ok) {
+                        patchedCount++;
+                        patchedNames.add("Emotes");
+                    }
+                } else {
+                    System.err.println("[LunarCookies] loadClassBytes failed for EmoteService$Stub");
+                }
+            } catch (Throwable t) {
+                System.err.println("[LunarCookies] Error patching EmoteService$Stub: " + t);
+            }
+
+            // 4. SprayService$Stub
+            try {
+                Class<?> sprayStubClass = cl.loadClass("com.lunarclient.websocket.spray.v1.SprayService$Stub");
+                byte[] rawBytes = loadClassBytes(cl, "com/lunarclient/websocket/spray/v1/SprayService$Stub.class");
+                if (rawBytes != null) {
+                    byte[] patchedBytes = patchStubClassBytes(rawBytes, "com/lunarcookies/SessionSwitcher", new String[][]{
+                        {"login", "(Lcom/google/protobuf/RpcController;Lcom/lunarclient/websocket/spray/v1/LoginRequest;Lcom/google/protobuf/RpcCallback;)V", "handleSprayLogin"},
+                        {"useSpray", "(Lcom/google/protobuf/RpcController;Lcom/lunarclient/websocket/spray/v1/UseSprayRequest;Lcom/google/protobuf/RpcCallback;)V", "handleUseSpray"},
+                        {"updateEquippedSprays", "(Lcom/google/protobuf/RpcController;Lcom/lunarclient/websocket/spray/v1/UpdateEquippedSpraysRequest;Lcom/google/protobuf/RpcCallback;)V", "handleUpdateEquippedSprays"}
+                    });
+                    boolean ok = patchedBytes != null && nativeRedefineClass(sprayStubClass, patchedBytes);
+                    System.out.println("[LunarCookies] SprayService$Stub redefinition result: " + ok);
+                    if (ok) {
+                        patchedCount++;
+                        patchedNames.add("Sprays");
+                    }
+                } else {
+                    System.err.println("[LunarCookies] loadClassBytes failed for SprayService$Stub");
+                }
+            } catch (Throwable t) {
+                System.err.println("[LunarCookies] Error patching SprayService$Stub: " + t);
+            }
+
+            if (patchedCount > 0) {
+                cosmeticsPatched = true;
+                StringBuilder sb = new StringBuilder("Unlocked: ");
+                for (int i = 0; i < patchedNames.size(); i++) {
+                    if (i > 0) sb.append(", ");
+                    sb.append(patchedNames.get(i));
+                }
+                cosmeticsStatusDetails = sb.toString();
+
+                ensureSavedFiles(cl);
+
+                // Trigger in-game refresh so Lunar's live in-memory caches populate immediately
+                try {
+                    triggerLunarRefresh(cl);
+                } catch (Throwable t) {
+                    System.err.println("[LunarCookies] Error triggering Lunar refresh: " + t);
+                }
+
+                try {
+                    final ClassLoader fcl = cl;
+                    runOnGameThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                triggerLunarRefresh(fcl);
+                            } catch (Throwable t) {
+                                System.err.println("[LunarCookies] Game thread refresh error: " + t);
+                            }
+                        }
+                    });
+                } catch (Throwable ignored) {}
+
+                return "ok:" + cosmeticsStatusDetails;
+            } else {
+                return "error:Lunar services not found or redefinition failed";
+            }
+        } catch (Throwable t) {
+            return "error:" + describeThrowable(t);
+        }
+    }
+
+    // ---------------------------------------------------------
+    // In-Game Live Refresh Triggering
+    // ---------------------------------------------------------
+
+    public static void triggerLunarRefresh(ClassLoader cl) {
+        if (cl == null) {
+            cl = SessionSwitcher.class.getClassLoader();
+            if (cl == null) cl = Thread.currentThread().getContextClassLoader();
+        }
+
+        try {
+            Object wsClient = findWebSocketClient(cl);
+            if (wsClient == null) {
+                System.out.println("[LunarCookies] Asset WebSocketClient instance not found for refresh trigger.");
+            } else {
+                System.out.println("[LunarCookies] Found Asset WebSocketClient: " + wsClient.getClass().getName());
+
+                // 1. Dispatch Push Messages to trigger standard Lunar websocket event handlers
+                try {
+                    Class<?> pushClass = cl.loadClass("com.lunarclient.websocket.cosmetic.v2.RefreshCosmeticsPush");
+                    Object push = pushClass.getMethod("getDefaultInstance").invoke(null);
+                    boolean pushed = invokePushMethod(wsClient, pushClass, push);
+                    System.out.println("[LunarCookies] Pushed RefreshCosmeticsPush: " + pushed);
+                } catch (Throwable t) {
+                    System.err.println("[LunarCookies] Push RefreshCosmeticsPush failed: " + t);
+                }
+
+                try {
+                    Class<?> pushClass = cl.loadClass("com.lunarclient.websocket.badge.v1.RefreshBadgesPush");
+                    Object push = pushClass.getMethod("getDefaultInstance").invoke(null);
+                    boolean pushed = invokePushMethod(wsClient, pushClass, push);
+                    System.out.println("[LunarCookies] Pushed RefreshBadgesPush: " + pushed);
+                } catch (Throwable t) {
+                    System.err.println("[LunarCookies] Push RefreshBadgesPush failed: " + t);
+                }
+
+                try {
+                    Class<?> pushClass = cl.loadClass("com.lunarclient.websocket.emote.v1.RefreshEmotesPush");
+                    Object push = pushClass.getMethod("getDefaultInstance").invoke(null);
+                    boolean pushed = invokePushMethod(wsClient, pushClass, push);
+                    System.out.println("[LunarCookies] Pushed RefreshEmotesPush: " + pushed);
+                } catch (Throwable t) {
+                    System.err.println("[LunarCookies] Push RefreshEmotesPush failed: " + t);
+                }
+
+                // 2. Invoke zero-arg login dispatchers if present on wsClient
+                invokeZeroArgMethod(wsClient, "HROIRCOOIHCIICOHOICRRCORRHHHOH"); // cosmetic login
+                invokeZeroArgMethod(wsClient, "HOOORIRCHIHRRCCCCCRCHIIHOOCIHC"); // badge login
+                invokeZeroArgMethod(wsClient, "CCOOIIHCCCOORRCIHICHHCHICHCOOI"); // emote login
+                invokeZeroArgMethod(wsClient, "ICIOCCRCCHRHCOIRCIHHIIRIHRIOOO"); // spray login
+
+                // 3. Direct LoginResponse feed into wsClient's response receiver methods
+                // (Methods like RCRROIORHICCOHOIIIRROHIORIIIHC(cosmetic.LoginResponse) immediately update in-memory models)
+                try {
+                    Object cosmeticResp = buildCosmeticLoginResponse(cl);
+                    if (cosmeticResp != null) {
+                        boolean fed = feedLoginResponse(wsClient, cosmeticResp);
+                        System.out.println("[LunarCookies] Directly fed cosmetic LoginResponse to wsClient: " + fed);
+                    }
+                } catch (Throwable t) {
+                    System.err.println("[LunarCookies] Direct feed cosmetic to wsClient failed: " + t);
+                }
+
+                try {
+                    Object badgeResp = buildBadgeLoginResponse(cl);
+                    if (badgeResp != null) {
+                        boolean fed = feedLoginResponse(wsClient, badgeResp);
+                        System.out.println("[LunarCookies] Directly fed badge LoginResponse to wsClient: " + fed);
+                    }
+                } catch (Throwable t) {
+                    System.err.println("[LunarCookies] Direct feed badge to wsClient failed: " + t);
+                }
+
+                try {
+                    Object emoteResp = buildEmoteLoginResponse(cl);
+                    if (emoteResp != null) {
+                        boolean fed = feedLoginResponse(wsClient, emoteResp);
+                        System.out.println("[LunarCookies] Directly fed emote LoginResponse to wsClient: " + fed);
+                    }
+                } catch (Throwable t) {
+                    System.err.println("[LunarCookies] Direct feed emote to wsClient failed: " + t);
+                }
+
+                try {
+                    Object sprayResp = buildSprayLoginResponse(cl);
+                    if (sprayResp != null) {
+                        boolean fed = feedLoginResponse(wsClient, sprayResp);
+                        System.out.println("[LunarCookies] Directly fed spray LoginResponse to wsClient: " + fed);
+                    }
+                } catch (Throwable t) {
+                    System.err.println("[LunarCookies] Direct feed spray to wsClient failed: " + t);
+                }
+
+                // 4. Reconnect WebSocket client
+                try {
+                    Method reconnect = wsClient.getClass().getMethod("reconnect");
+                    reconnect.invoke(wsClient);
+                    System.out.println("[LunarCookies] Triggered wsClient.reconnect()");
+                } catch (Throwable t) {
+                    System.err.println("[LunarCookies] wsClient.reconnect() error: " + t);
+                }
+            }
+
+            // 5. Also feed LoginResponses directly into LunarClient's internal models (e.g. CosmeticModel)
+            try {
+                feedLunarManagers(cl);
+            } catch (Throwable t) {
+                System.err.println("[LunarCookies] Error feeding Lunar managers: " + t);
+            }
+
+            // 6. Force cosmeticState to READY
+            try {
+                setCosmeticStateReady(wsClient, cl);
+            } catch (Throwable t) {
+                System.err.println("[LunarCookies] Error setting cosmeticState: " + t);
+            }
+
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Error in triggerLunarRefresh: " + t);
+        }
+    }
+
+    private static void setCosmeticStateReady(Object wsClient, ClassLoader cl) {
+        if (wsClient == null && cl != null) {
+            wsClient = findWebSocketClient(cl);
+        }
+        if (wsClient == null) return;
+        try {
+            Class<?> stateEnumClass = null;
+            Object readyVal = "ready";
+            try {
+                stateEnumClass = cl.loadClass("com.moonsworth.lunar.client.HRCORCCCHOCRCICCRHOHHICOIIICII.RCIORCRRIROROHROCCOIIOHCHIICRC");
+                if (stateEnumClass != null) {
+                    Object readyEnum = Enum.valueOf((Class<Enum>) stateEnumClass, "READY");
+                    Method getId = stateEnumClass.getMethod("getId");
+                    readyVal = getId.invoke(readyEnum);
+                }
+            } catch (Throwable ignored) {}
+
+            for (Class<?> cur = wsClient.getClass(); cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+                for (Field f : cur.getDeclaredFields()) {
+                    if (!Modifier.isStatic(f.getModifiers())) {
+                        f.setAccessible(true);
+                        Object val = f.get(wsClient);
+                        if (val != null) {
+                            for (Method m : val.getClass().getDeclaredMethods()) {
+                                if (m.getParameterTypes().length == 2 && m.getParameterTypes()[0] == String.class) {
+                                    try {
+                                        m.setAccessible(true);
+                                        m.invoke(val, "cosmeticState", readyVal);
+                                        System.out.println("[LunarCookies] Set cosmeticState to " + readyVal + " on " + val.getClass().getSimpleName());
+                                    } catch (Throwable ignored) {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] setCosmeticStateReady error: " + t);
+        }
+    }
+
+    private static void feedLunarManagers(ClassLoader cl) {
+        try {
+            Object lcInstance = null;
+            for (String cn : new String[]{"com.moonsworth.lunar.client.RCRROIORHICCOHOIIIRROHIORIIIHC", "com.moonsworth.lunar.client.LunarClient"}) {
+                try {
+                    Class<?> lcClass = cl.loadClass(cn);
+                    for (Method m : lcClass.getDeclaredMethods()) {
+                        if (Modifier.isStatic(m.getModifiers()) && m.getParameterTypes().length == 0 && m.getReturnType() == lcClass) {
+                            m.setAccessible(true);
+                            lcInstance = m.invoke(null);
+                            if (lcInstance != null) break;
+                        }
+                    }
+                    if (lcInstance != null) break;
+                    for (Field f : lcClass.getDeclaredFields()) {
+                        if (Modifier.isStatic(f.getModifiers()) && f.getType() == lcClass) {
+                            f.setAccessible(true);
+                            lcInstance = f.get(null);
+                            if (lcInstance != null) break;
+                        }
+                    }
+                    if (lcInstance != null) break;
+                } catch (Throwable ignored) {}
+            }
+            if (lcInstance == null) return;
+
+            Object cosmeticResp = buildCosmeticLoginResponse(cl);
+            if (cosmeticResp == null) return;
+
+            for (Class<?> cur = lcInstance.getClass(); cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+                for (Field f : cur.getDeclaredFields()) {
+                    if (!Modifier.isStatic(f.getModifiers())) {
+                        try {
+                            f.setAccessible(true);
+                            Object val = f.get(lcInstance);
+                            if (val != null) {
+                                feedLoginResponse(val, cosmeticResp);
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static boolean feedLoginResponse(Object target, Object response) {
+        if (target == null || response == null) return false;
+        Class<?> respClass = response.getClass();
+        boolean success = false;
+        Class<?> targetClass = (target instanceof Class) ? (Class<?>) target : target.getClass();
+        for (Class<?> cur = targetClass; cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+            for (Method m : cur.getDeclaredMethods()) {
+                if (m.getParameterTypes().length == 1 && m.getParameterTypes()[0].isAssignableFrom(respClass)) {
+                    String mName = m.getName();
+                    if (mName.equals("compareTo") || mName.equals("add") || mName.equals("remove") || mName.equals("equals")) {
+                        continue;
+                    }
+                    try {
+                        m.setAccessible(true);
+                        if (Modifier.isStatic(m.getModifiers())) {
+                            m.invoke(null, response);
+                        } else if (!(target instanceof Class)) {
+                            m.invoke(target, response);
+                        }
+                        success = true;
+                    } catch (Throwable t) {
+                        Throwable cause = (t instanceof InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+                        System.err.println("[LunarCookies] feedLoginResponse error on " + m.getName() + ": " + cause);
+                    }
+                }
+            }
+        }
+        return success;
+    }
+
+    private static Object findWebSocketClient(ClassLoader cl) {
+        // Strategy 1: Ref singleton (com.moonsworth.lunar.client.util.CHRRRIOROCCOCHHROHCHORROOROHCR)
+        try {
+            Class<?> refClass = cl.loadClass("com.moonsworth.lunar.client.util.CHRRRIOROCCOCHHROHCHORROOROHCR");
+            for (Method m : refClass.getDeclaredMethods()) {
+                if (Modifier.isStatic(m.getModifiers()) && m.getParameterTypes().length == 0) {
+                    if (m.getReturnType().getName().equals("java.util.Optional")) {
+                        m.setAccessible(true);
+                        Object opt = m.invoke(null);
+                        if (opt != null) {
+                            Method isPresent = opt.getClass().getMethod("isPresent");
+                            if (Boolean.TRUE.equals(isPresent.invoke(opt))) {
+                                Object val = opt.getClass().getMethod("get").invoke(opt);
+                                if (val != null && isAssetWebSocketClient(val.getClass())) {
+                                    return val;
+                                }
+                            }
+                        }
+                    } else if (isAssetWebSocketClient(m.getReturnType())) {
+                        m.setAccessible(true);
+                        Object val = m.invoke(null);
+                        if (val != null) return val;
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Strategy 1 (Ref) error: " + t);
+        }
+
+        // Strategy 2: LunarClient singleton
+        try {
+            for (String cn : new String[]{"com.moonsworth.lunar.client.RCRROIORHICCOHOIIIRROHIORIIIHC", "com.moonsworth.lunar.client.LunarClient"}) {
+                try {
+                    Class<?> lcClass = cl.loadClass(cn);
+                    Object lcInstance = null;
+                    for (Method m : lcClass.getDeclaredMethods()) {
+                        if (Modifier.isStatic(m.getModifiers()) && m.getParameterTypes().length == 0 && m.getReturnType() == lcClass) {
+                            m.setAccessible(true);
+                            lcInstance = m.invoke(null);
+                            if (lcInstance != null) break;
+                        }
+                    }
+                    if (lcInstance == null) {
+                        for (Field f : lcClass.getDeclaredFields()) {
+                            if (Modifier.isStatic(f.getModifiers()) && f.getType() == lcClass) {
+                                f.setAccessible(true);
+                                lcInstance = f.get(null);
+                                if (lcInstance != null) break;
+                            }
+                        }
+                    }
+                    if (lcInstance != null) {
+                        for (Method m : lcClass.getDeclaredMethods()) {
+                            if (!Modifier.isStatic(m.getModifiers()) && m.getParameterTypes().length == 0) {
+                                if (m.getReturnType().getName().equals("java.util.Optional")) {
+                                    m.setAccessible(true);
+                                    Object opt = m.invoke(lcInstance);
+                                    if (opt != null) {
+                                        Method isPresent = opt.getClass().getMethod("isPresent");
+                                        if (Boolean.TRUE.equals(isPresent.invoke(opt))) {
+                                            Object val = opt.getClass().getMethod("get").invoke(opt);
+                                            if (val != null && isAssetWebSocketClient(val.getClass())) {
+                                                return val;
+                                            }
+                                        }
+                                    }
+                                } else if (isAssetWebSocketClient(m.getReturnType())) {
+                                    m.setAccessible(true);
+                                    Object ws = m.invoke(lcInstance);
+                                    if (ws != null) return ws;
+                                }
+                            }
+                        }
+                        for (Field f : lcClass.getDeclaredFields()) {
+                            if (!Modifier.isStatic(f.getModifiers())) {
+                                f.setAccessible(true);
+                                Object val = f.get(lcInstance);
+                                if (val != null && isAssetWebSocketClient(val.getClass())) {
+                                    return val;
+                                }
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Strategy 2 (LunarClient) error: " + t);
+        }
+
+        // Strategy 3: Thread inspection
+        try {
+            ThreadGroup rootGroup = Thread.currentThread().getThreadGroup();
+            while (rootGroup.getParent() != null) rootGroup = rootGroup.getParent();
+            Thread[] threads = new Thread[rootGroup.activeCount() + 64];
+            int count = rootGroup.enumerate(threads, true);
+            for (int i = 0; i < count; i++) {
+                Thread t = threads[i];
+                if (t == null) continue;
+                if (isAssetWebSocketClient(t.getClass())) return t;
+                for (Class<?> cur = t.getClass(); cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+                    for (Field f : cur.getDeclaredFields()) {
+                        try {
+                            f.setAccessible(true);
+                            Object val = f.get(t);
+                            if (val != null && isAssetWebSocketClient(val.getClass())) return val;
+                        } catch (Throwable ignored) {}
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Strategy 3 (Threads) error: " + t);
+        }
+
+        return null;
+    }
+
+    private static boolean isAssetWebSocketClient(Class<?> clazz) {
+        if (clazz == null) return false;
+        boolean extendsWs = false;
+        for (Class<?> cur = clazz; cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+            if (cur.getName().contains("WebSocketClient")) {
+                extendsWs = true;
+                break;
+            }
+        }
+        if (!extendsWs) return false;
+
+        // Must NOT be the launcher IPC client
+        if (clazz.getName().contains("gameipc")) return false;
+
+        // Must have cosmetic reference in fields or methods
+        for (Field f : clazz.getDeclaredFields()) {
+            String typeName = f.getType().getName();
+            if (typeName.contains("cosmetic") || typeName.contains("CosmeticService")) return true;
+        }
+        for (Method m : clazz.getDeclaredMethods()) {
+            if (m.getReturnType().getName().contains("cosmetic")) return true;
+            for (Class<?> p : m.getParameterTypes()) {
+                if (p.getName().contains("cosmetic") || p.getName().contains("CosmeticService")) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean invokePushMethod(Object wsClient, Class<?> paramType, Object paramVal) {
+        if (wsClient == null || paramType == null || paramVal == null) return false;
+        for (Class<?> cur = wsClient.getClass(); cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+            for (Method m : cur.getDeclaredMethods()) {
+                if (m.getParameterTypes().length == 1 && m.getParameterTypes()[0].isAssignableFrom(paramType)) {
+                    try {
+                        m.setAccessible(true);
+                        m.invoke(wsClient, paramVal);
+                        return true;
+                    } catch (Throwable ignored) {}
+                }
+            }
+        }
+        return false;
+    }
+
+    private static boolean invokeZeroArgMethod(Object target, String methodName) {
+        if (target == null || methodName == null) return false;
+        for (Class<?> cur = target.getClass(); cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+            try {
+                Method m = cur.getDeclaredMethod(methodName);
+                if (m.getParameterTypes().length == 0) {
+                    m.setAccessible(true);
+                    m.invoke(target);
+                    return true;
+                }
+            } catch (Throwable ignored) {}
+        }
+        return false;
+    }
+
+    // ---------------------------------------------------------
+    // RPC Handlers called directly from patched bytecode
+    // ---------------------------------------------------------
+
+    private static ClassLoader resolveClassLoader(Object obj) {
+        ClassLoader cl = obj != null ? obj.getClass().getClassLoader() : null;
+        if (cl == null) cl = SessionSwitcher.class.getClassLoader();
+        if (cl == null) cl = Thread.currentThread().getContextClassLoader();
+        return cl;
+    }
+
+    public static Object buildCosmeticLoginResponse(ClassLoader cl) {
+        try {
+            Class<?> loginResponseClass = cl.loadClass("com.lunarclient.websocket.cosmetic.v2.LoginResponse");
+            Class<?> outfitClass = cl.loadClass("com.lunarclient.websocket.cosmetic.v2.Outfit");
+            Class<?> outfitTreeClass = cl.loadClass("com.lunarclient.websocket.cosmetic.v2.OutfitTree");
+
+            Object outfit = readSavedOutfit(cl);
+
+            Object builder = loginResponseClass.getMethod("newBuilder").invoke(null);
+            builder.getClass().getMethod("setHasAllCosmeticsFlag", boolean.class).invoke(builder, true);
+            builder.getClass().getMethod("setArtistTools", boolean.class).invoke(builder, true);
+
+            if (outfit != null) {
+                builder.getClass().getMethod("addOutfits", outfitClass).invoke(builder, outfit);
+            }
+
+            Object treeBuilder = outfitTreeClass.getMethod("newBuilder").invoke(null);
+            if (outfit != null) {
+                Object outfitId = outfitClass.getMethod("getId").invoke(outfit);
+                for (Method m : treeBuilder.getClass().getMethods()) {
+                    if (m.getName().equals("setDefaultOutfitId") && m.getParameterTypes().length == 1
+                            && (outfitId == null || m.getParameterTypes()[0].isInstance(outfitId))) {
+                        m.invoke(treeBuilder, outfitId);
+                        break;
+                    }
+                }
+            }
+            Object outfitTree = treeBuilder.getClass().getMethod("build").invoke(treeBuilder);
+            builder.getClass().getMethod("setOutfitTree", outfitTreeClass).invoke(builder, outfitTree);
+
+            try {
+                Class<?> visEnum = cl.loadClass("com.lunarclient.websocket.cosmetic.v2.CosmeticOwnershipVisibility");
+                Object visEveryone = Enum.valueOf((Class<Enum>) visEnum, "COSMETIC_OWNERSHIP_VISIBILITY_EVERYONE");
+                for (Method m : builder.getClass().getMethods()) {
+                    if (m.getName().equals("setCosmeticOwnershipVisibility") && m.getParameterTypes().length == 1
+                            && m.getParameterTypes()[0].isAssignableFrom(visEnum)) {
+                        m.invoke(builder, visEveryone);
+                        break;
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            try {
+                builder.getClass().getMethod("setRankName", String.class).invoke(builder, "Lunar+");
+            } catch (Throwable ignored) {}
+
+            try {
+                Class<?> colorClass = cl.loadClass("com.lunarclient.common.v1.Color");
+                Object colorBuilder = colorClass.getMethod("newBuilder").invoke(null);
+                colorBuilder.getClass().getMethod("setColor", int.class).invoke(colorBuilder, 0);
+                Object zeroColor = colorBuilder.getClass().getMethod("build").invoke(colorBuilder);
+                for (Method m : builder.getClass().getMethods()) {
+                    if (m.getParameterTypes().length == 1 && m.getParameterTypes()[0].isAssignableFrom(colorClass)) {
+                        if (m.getName().equals("setPlusColor") || m.getName().equals("setLogoColor")) {
+                            m.invoke(builder, zeroColor);
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+
+            try {
+                builder.getClass().getMethod("setLogoAlwaysShow", boolean.class).invoke(builder, false);
+            } catch (Throwable ignored) {}
+
+            return builder.getClass().getMethod("build").invoke(builder);
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Error building cosmetic LoginResponse: " + t);
+            t.printStackTrace();
+            return null;
+        }
+    }
+
+    public static void handleCosmeticLogin(Object controller, Object request, Object callback) {
+        System.out.println("[LunarCookies] handleCosmeticLogin called!");
+        try {
+            ClassLoader cl = resolveClassLoader(callback);
+            Object response = buildCosmeticLoginResponse(cl);
+            runCallback(callback, response);
+            System.out.println("[LunarCookies] Delivered cosmetic LoginResponse to callback!");
+            setCosmeticStateReady(null, cl);
+        } catch (Throwable t) {
+            Throwable cause = (t instanceof InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+            System.err.println("[LunarCookies] Error handling cosmetic login: " + cause);
+            cause.printStackTrace();
+        }
+    }
+
+    public static void handleUpdateOutfit(Object controller, Object request, Object callback) {
+        System.out.println("[LunarCookies] handleUpdateOutfit called!");
+        try {
+            Method getOutfit = request.getClass().getMethod("getOutfit");
+            Object outfit = getOutfit.invoke(request);
+            writeSavedOutfit(outfit);
+            System.out.println("[LunarCookies] Saved outfit to disk!");
+
+            if (callback != null) {
+                ClassLoader cl = resolveClassLoader(callback);
+                try {
+                    Class<?> respClass = cl.loadClass("com.lunarclient.websocket.cosmetic.v2.UpdateOutfitResponse");
+                    Object defResp = respClass.getMethod("getDefaultInstance").invoke(null);
+                    runCallback(callback, defResp);
+                } catch (Throwable ignored) {
+                    runCallback(callback, request);
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Error handling updateOutfit: " + t);
+        }
+    }
+
+    public static Object buildBadgeLoginResponse(ClassLoader cl) {
+        try {
+            Class<?> respClass = cl.loadClass("com.lunarclient.websocket.badge.v1.LoginResponse");
+            int badgeId = readSavedBadge();
+
+            Object builder = respClass.getMethod("newBuilder").invoke(null);
+            builder.getClass().getMethod("setHasAllBadgesFlag", boolean.class).invoke(builder, true);
+            builder.getClass().getMethod("setEquippedBadgeId", int.class).invoke(builder, badgeId);
+            return builder.getClass().getMethod("build").invoke(builder);
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Error building badge LoginResponse: " + t);
+            return null;
+        }
+    }
+
+    public static void handleBadgeLogin(Object controller, Object request, Object callback) {
+        System.out.println("[LunarCookies] handleBadgeLogin called!");
+        try {
+            ClassLoader cl = resolveClassLoader(callback);
+            Object response = buildBadgeLoginResponse(cl);
+            runCallback(callback, response);
+            System.out.println("[LunarCookies] Delivered badge LoginResponse to callback!");
+        } catch (Throwable t) {
+            Throwable cause = (t instanceof InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+            System.err.println("[LunarCookies] Error handling badge login: " + cause);
+            cause.printStackTrace();
+        }
+    }
+
+    public static void handleEquipBadge(Object controller, Object request, Object callback) {
+        System.out.println("[LunarCookies] handleEquipBadge called!");
+        try {
+            Method getBadgeId = request.getClass().getMethod("getBadgeId");
+            int badgeId = (Integer) getBadgeId.invoke(request);
+            writeSavedBadge(badgeId);
+            System.out.println("[LunarCookies] Saved badge to disk: " + badgeId);
+
+            if (callback != null) {
+                ClassLoader cl = resolveClassLoader(callback);
+                Class<?> respClass = cl.loadClass("com.lunarclient.websocket.badge.v1.EquipBadgeResponse");
+                Object defResp = respClass.getMethod("getDefaultInstance").invoke(null);
+                runCallback(callback, defResp);
+            }
+        } catch (Throwable t) {
+            Throwable cause = (t instanceof InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+            System.err.println("[LunarCookies] Error handling equipBadge: " + cause);
+            cause.printStackTrace();
+        }
+    }
+
+    public static Object buildEmoteLoginResponse(ClassLoader cl) {
+        try {
+            Class<?> respClass = cl.loadClass("com.lunarclient.websocket.emote.v1.LoginResponse");
+            List<?> equipped = readSavedEquippedEmotes(cl);
+
+            Object builder = respClass.getMethod("newBuilder").invoke(null);
+            builder.getClass().getMethod("setHasAllEmotesFlag", boolean.class).invoke(builder, true);
+            for (Method m : builder.getClass().getMethods()) {
+                if (m.getName().equals("addAllEquippedEmotes") && m.getParameterTypes().length == 1) {
+                    m.invoke(builder, equipped);
+                    break;
+                }
+            }
+            return builder.getClass().getMethod("build").invoke(builder);
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Error building emote LoginResponse: " + t);
+            return null;
+        }
+    }
+
+    public static void handleEmoteLogin(Object controller, Object request, Object callback) {
+        System.out.println("[LunarCookies] handleEmoteLogin called!");
+        try {
+            ClassLoader cl = resolveClassLoader(callback);
+            Object response = buildEmoteLoginResponse(cl);
+            runCallback(callback, response);
+            System.out.println("[LunarCookies] Delivered emote LoginResponse to callback!");
+        } catch (Throwable t) {
+            Throwable cause = (t instanceof InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+            System.err.println("[LunarCookies] Error handling emote login: " + cause);
+            cause.printStackTrace();
+        }
+    }
+
+    public static void handleUseEmote(Object controller, Object request, Object callback) {
+        try {
+            ClassLoader cl = resolveClassLoader(callback);
+            Class<?> respClass = cl.loadClass("com.lunarclient.websocket.emote.v1.UseEmoteResponse");
+            Class<?> statusEnum = cl.loadClass("com.lunarclient.websocket.emote.v1.UseEmoteResponse$Status");
+            Object statusOk = Enum.valueOf((Class<Enum>) statusEnum, "STATUS_OK");
+
+            Object builder = respClass.getMethod("newBuilder").invoke(null);
+            builder.getClass().getMethod("setStatus", statusEnum).invoke(builder, statusOk);
+            Object response = builder.getClass().getMethod("build").invoke(builder);
+
+            runCallback(callback, response);
+        } catch (Throwable t) {
+            Throwable cause = (t instanceof InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+            System.err.println("[LunarCookies] Error handling useEmote: " + cause);
+            cause.printStackTrace();
+        }
+    }
+
+    public static void handleUpdateEquippedEmotes(Object controller, Object request, Object callback) {
+        System.out.println("[LunarCookies] handleUpdateEquippedEmotes called!");
+        try {
+            Method getList = request.getClass().getMethod("getEquippedEmotesList");
+            List<?> emotes = (List<?>) getList.invoke(request);
+            writeSavedEquippedEmotes(emotes);
+            System.out.println("[LunarCookies] Saved equipped emotes to disk!");
+
+            if (callback != null) {
+                ClassLoader cl = resolveClassLoader(callback);
+                Class<?> respClass = cl.loadClass("com.lunarclient.websocket.emote.v1.UpdateEquippedEmotesResponse");
+                Object defResp = respClass.getMethod("getDefaultInstance").invoke(null);
+                runCallback(callback, defResp);
+            }
+        } catch (Throwable t) {
+            Throwable cause = (t instanceof InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+            System.err.println("[LunarCookies] Error handling updateEquippedEmotes: " + cause);
+            cause.printStackTrace();
+        }
+    }
+
+    public static Object buildSprayLoginResponse(ClassLoader cl) {
+        try {
+            Class<?> respClass = cl.loadClass("com.lunarclient.websocket.spray.v1.LoginResponse");
+            List<?> equipped = readSavedEquippedSprays(cl);
+
+            Object builder = respClass.getMethod("newBuilder").invoke(null);
+            builder.getClass().getMethod("setHasAllSpraysFlag", boolean.class).invoke(builder, true);
+            for (Method m : builder.getClass().getMethods()) {
+                if (m.getName().equals("addAllEquippedSprays") && m.getParameterTypes().length == 1) {
+                    m.invoke(builder, equipped);
+                    break;
+                }
+            }
+            return builder.getClass().getMethod("build").invoke(builder);
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Error building spray LoginResponse: " + t);
+            return null;
+        }
+    }
+
+    public static void handleSprayLogin(Object controller, Object request, Object callback) {
+        System.out.println("[LunarCookies] handleSprayLogin called!");
+        try {
+            ClassLoader cl = resolveClassLoader(callback);
+            Object response = buildSprayLoginResponse(cl);
+            runCallback(callback, response);
+            System.out.println("[LunarCookies] Delivered spray LoginResponse to callback!");
+        } catch (Throwable t) {
+            Throwable cause = (t instanceof InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+            System.err.println("[LunarCookies] Error handling spray login: " + cause);
+            cause.printStackTrace();
+        }
+    }
+
+    public static void handleUseSpray(Object controller, Object request, Object callback) {
+        try {
+            ClassLoader cl = resolveClassLoader(callback);
+            Class<?> respClass = cl.loadClass("com.lunarclient.websocket.spray.v1.UseSprayResponse");
+            Class<?> statusEnum = cl.loadClass("com.lunarclient.websocket.spray.v1.UseSprayResponse$Status");
+            Object statusOk = Enum.valueOf((Class<Enum>) statusEnum, "STATUS_OK");
+
+            Object builder = respClass.getMethod("newBuilder").invoke(null);
+            builder.getClass().getMethod("setStatus", statusEnum).invoke(builder, statusOk);
+            Object response = builder.getClass().getMethod("build").invoke(builder);
+
+            runCallback(callback, response);
+        } catch (Throwable t) {
+            Throwable cause = (t instanceof InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+            System.err.println("[LunarCookies] Error handling useSpray: " + cause);
+            cause.printStackTrace();
+        }
+    }
+
+    public static void handleUpdateEquippedSprays(Object controller, Object request, Object callback) {
+        System.out.println("[LunarCookies] handleUpdateEquippedSprays called!");
+        try {
+            Method getList = request.getClass().getMethod("getEquippedSpraysList");
+            List<?> sprays = (List<?>) getList.invoke(request);
+            writeSavedEquippedSprays(sprays);
+            System.out.println("[LunarCookies] Saved equipped sprays to disk!");
+
+            if (callback != null) {
+                ClassLoader cl = resolveClassLoader(callback);
+                Class<?> respClass = cl.loadClass("com.lunarclient.websocket.spray.v1.UpdateEquippedSpraysResponse");
+                Object defResp = respClass.getMethod("getDefaultInstance").invoke(null);
+                runCallback(callback, defResp);
+            }
+        } catch (Throwable t) {
+            Throwable cause = (t instanceof InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+            System.err.println("[LunarCookies] Error handling updateEquippedSprays: " + cause);
+            cause.printStackTrace();
+        }
+    }
+
+    private static void runCallback(Object callback, Object response) throws Exception {
+        if (callback == null) return;
+        try {
+            for (Method m : callback.getClass().getMethods()) {
+                if (m.getName().equals("run") && m.getParameterTypes().length == 1) {
+                    m.setAccessible(true);
+                    m.invoke(callback, response);
+                    return;
+                }
+            }
+            Method runMethod = callback.getClass().getMethod("run", Object.class);
+            runMethod.invoke(callback, response);
+        } catch (Throwable t) {
+            Throwable cause = (t instanceof InvocationTargetException && t.getCause() != null) ? t.getCause() : t;
+            System.err.println("[LunarCookies] runCallback error: " + cause);
+            cause.printStackTrace();
+            throw (cause instanceof Exception) ? (Exception) cause : new RuntimeException(cause);
+        }
+    }
+
+    // ---------------------------------------------------------
+    // Persistence Helpers (Compatible with Prometheus files)
+    // ---------------------------------------------------------
+
+    private static Object readSavedOutfit(ClassLoader cl) {
+        try {
+            Class<?> outfitClass = cl.loadClass("com.lunarclient.websocket.cosmetic.v2.Outfit");
+            Class<?> uuidClass = cl.loadClass("com.lunarclient.common.v1.Uuid");
+
+            Object builder = outfitClass.getMethod("newBuilder").invoke(null);
+            builder.getClass().getMethod("setName", String.class).invoke(builder, "Prometheus");
+            builder.getClass().getMethod("setFavorite", boolean.class).invoke(builder, true);
+
+            Object defaultUuid = null;
+            try {
+                Object uuidBuilder = uuidClass.getMethod("newBuilder").invoke(null);
+                UUID randId = UUID.randomUUID();
+                try {
+                    uuidBuilder.getClass().getMethod("setHigh64", long.class).invoke(uuidBuilder, randId.getMostSignificantBits());
+                    uuidBuilder.getClass().getMethod("setLow64", long.class).invoke(uuidBuilder, randId.getLeastSignificantBits());
+                } catch (Throwable t1) {
+                    for (Method m : uuidBuilder.getClass().getMethods()) {
+                        if (m.getParameterTypes().length == 1 && m.getParameterTypes()[0] == long.class) {
+                            if (m.getName().toLowerCase().contains("high")) m.invoke(uuidBuilder, randId.getMostSignificantBits());
+                            if (m.getName().toLowerCase().contains("low")) m.invoke(uuidBuilder, randId.getLeastSignificantBits());
+                        }
+                    }
+                }
+                defaultUuid = uuidBuilder.getClass().getMethod("build").invoke(uuidBuilder);
+                for (Method m : builder.getClass().getMethods()) {
+                    if (m.getName().equals("setId") && m.getParameterTypes().length == 1
+                            && m.getParameterTypes()[0].isAssignableFrom(uuidClass)) {
+                        m.invoke(builder, defaultUuid);
+                        break;
+                    }
+                }
+            } catch (Throwable tUuid) {
+                System.err.println("[LunarCookies] Error creating default outfit UUID: " + tUuid);
+            }
+
+            File f = getSavedFile("outfit.bin");
+            if (f.exists() && f.length() > 0) {
+                FileInputStream fis = new FileInputStream(f);
+                try {
+                    Method parseFrom = outfitClass.getMethod("parseFrom", InputStream.class);
+                    Object parsed = parseFrom.invoke(null, fis);
+                    if (parsed != null) {
+                        for (Method m : builder.getClass().getMethods()) {
+                            if (m.getName().equals("mergeFrom") && m.getParameterTypes().length == 1
+                                    && m.getParameterTypes()[0].isAssignableFrom(outfitClass)) {
+                                m.invoke(builder, parsed);
+                                break;
+                            }
+                        }
+                        // Ensure outfit has an ID if parsed lacked one
+                        try {
+                            Method hasId = parsed.getClass().getMethod("hasId");
+                            if (!Boolean.TRUE.equals(hasId.invoke(parsed)) && defaultUuid != null) {
+                                for (Method m : builder.getClass().getMethods()) {
+                                    if (m.getName().equals("setId") && m.getParameterTypes().length == 1
+                                            && m.getParameterTypes()[0].isAssignableFrom(uuidClass)) {
+                                        m.invoke(builder, defaultUuid);
+                                        break;
+                                    }
+                                }
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                } finally {
+                    fis.close();
+                }
+            }
+            return builder.getClass().getMethod("build").invoke(builder);
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Error in readSavedOutfit: " + t);
+            t.printStackTrace();
+            return null;
+        }
+    }
+
+    private static void writeSavedOutfit(Object outfit) {
+        if (outfit == null) return;
+        try {
+            File f = getSavedFile("outfit.bin");
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            FileOutputStream fos = new FileOutputStream(f);
+            try {
+                Method writeTo = outfit.getClass().getMethod("writeTo", OutputStream.class);
+                writeTo.invoke(outfit, fos);
+            } finally {
+                fos.close();
+            }
+
+            // Also mirror to %APPDATA%/.minecraft/prometheus/saved/outfit.bin if different
+            try {
+                String appdata = System.getenv("APPDATA");
+                if (appdata != null && !appdata.trim().isEmpty()) {
+                    File mcFile = new File(new File(appdata, ".minecraft"), "prometheus" + File.separator + "saved" + File.separator + "outfit.bin");
+                    if (!mcFile.getCanonicalPath().equalsIgnoreCase(f.getCanonicalPath())) {
+                        if (mcFile.getParentFile() != null) mcFile.getParentFile().mkdirs();
+                        FileOutputStream fos2 = new FileOutputStream(mcFile);
+                        try {
+                            Method writeTo = outfit.getClass().getMethod("writeTo", OutputStream.class);
+                            writeTo.invoke(outfit, fos2);
+                        } finally {
+                            fos2.close();
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Error writing saved outfit: " + t);
+        }
+    }
+
+    private static int readSavedBadge() {
+        File f = getSavedFile("badge.bin");
+        if (f.exists() && f.length() > 0) {
+            try {
+                FileInputStream fis = new FileInputStream(f);
+                try {
+                    int b = fis.read();
+                    return b >= 0 ? b : 0;
+                } finally {
+                    fis.close();
+                }
+            } catch (Throwable ignored) {}
+        }
+        return 0;
+    }
+
+    private static void writeSavedBadge(int badgeId) {
+        try {
+            File f = getSavedFile("badge.bin");
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            FileOutputStream fos = new FileOutputStream(f);
+            try {
+                fos.write(badgeId);
+            } finally {
+                fos.close();
+            }
+
+            try {
+                String appdata = System.getenv("APPDATA");
+                if (appdata != null && !appdata.trim().isEmpty()) {
+                    File mcFile = new File(new File(appdata, ".minecraft"), "prometheus" + File.separator + "saved" + File.separator + "badge.bin");
+                    if (!mcFile.getCanonicalPath().equalsIgnoreCase(f.getCanonicalPath())) {
+                        if (mcFile.getParentFile() != null) mcFile.getParentFile().mkdirs();
+                        FileOutputStream fos2 = new FileOutputStream(mcFile);
+                        try {
+                            fos2.write(badgeId);
+                        } finally {
+                            fos2.close();
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {}
+    }
+
+    private static List<?> readSavedEquippedEmotes(ClassLoader cl) {
+        List<Object> list = new ArrayList<Object>();
+        File f = getSavedFile("emotes.bin");
+        if (f.exists() && f.length() > 0) {
+            try {
+                Class<?> emoteClass = cl.loadClass("com.lunarclient.websocket.emote.v1.EquippedEmote");
+                Method parseDelimited = emoteClass.getMethod("parseDelimitedFrom", InputStream.class);
+                FileInputStream fis = new FileInputStream(f);
+                try {
+                    while (fis.available() > 0) {
+                        Object emote = parseDelimited.invoke(null, fis);
+                        if (emote != null) {
+                            list.add(emote);
+                        } else {
+                            break;
+                        }
+                    }
+                } finally {
+                    fis.close();
+                }
+            } catch (Throwable ignored) {}
+        }
+        return list;
+    }
+
+    private static void writeSavedEquippedEmotes(List<?> emotes) {
+        if (emotes == null) return;
+        try {
+            File f = getSavedFile("emotes.bin");
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            FileOutputStream fos = new FileOutputStream(f);
+            try {
+                for (Object emote : emotes) {
+                    if (emote == null) continue;
+                    Method writeDelimited = emote.getClass().getMethod("writeDelimitedTo", OutputStream.class);
+                    writeDelimited.invoke(emote, fos);
+                }
+            } finally {
+                fos.close();
+            }
+
+            try {
+                String appdata = System.getenv("APPDATA");
+                if (appdata != null && !appdata.trim().isEmpty()) {
+                    File mcFile = new File(new File(appdata, ".minecraft"), "prometheus" + File.separator + "saved" + File.separator + "emotes.bin");
+                    if (!mcFile.getCanonicalPath().equalsIgnoreCase(f.getCanonicalPath())) {
+                        if (mcFile.getParentFile() != null) mcFile.getParentFile().mkdirs();
+                        FileOutputStream fos2 = new FileOutputStream(mcFile);
+                        try {
+                            for (Object emote : emotes) {
+                                if (emote == null) continue;
+                                Method writeDelimited = emote.getClass().getMethod("writeDelimitedTo", OutputStream.class);
+                                writeDelimited.invoke(emote, fos2);
+                            }
+                        } finally {
+                            fos2.close();
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {}
+    }
+
+    private static List<?> readSavedEquippedSprays(ClassLoader cl) {
+        List<Object> list = new ArrayList<Object>();
+        File f = getSavedFile("sprays.bin");
+        if (f.exists() && f.length() > 0) {
+            try {
+                Class<?> sprayClass = cl.loadClass("com.lunarclient.websocket.spray.v1.EquippedSpray");
+                Method parseDelimited = sprayClass.getMethod("parseDelimitedFrom", InputStream.class);
+                FileInputStream fis = new FileInputStream(f);
+                try {
+                    while (fis.available() > 0) {
+                        Object spray = parseDelimited.invoke(null, fis);
+                        if (spray != null) {
+                            list.add(spray);
+                        } else {
+                            break;
+                        }
+                    }
+                } finally {
+                    fis.close();
+                }
+            } catch (Throwable ignored) {}
+        }
+        return list;
+    }
+
+    private static void writeSavedEquippedSprays(List<?> sprays) {
+        if (sprays == null) return;
+        try {
+            File f = getSavedFile("sprays.bin");
+            if (f.getParentFile() != null) f.getParentFile().mkdirs();
+            FileOutputStream fos = new FileOutputStream(f);
+            try {
+                for (Object spray : sprays) {
+                    if (spray == null) continue;
+                    Method writeDelimited = spray.getClass().getMethod("writeDelimitedTo", OutputStream.class);
+                    writeDelimited.invoke(spray, fos);
+                }
+            } finally {
+                fos.close();
+            }
+
+            try {
+                String appdata = System.getenv("APPDATA");
+                if (appdata != null && !appdata.trim().isEmpty()) {
+                    File mcFile = new File(new File(appdata, ".minecraft"), "prometheus" + File.separator + "saved" + File.separator + "sprays.bin");
+                    if (!mcFile.getCanonicalPath().equalsIgnoreCase(f.getCanonicalPath())) {
+                        if (mcFile.getParentFile() != null) mcFile.getParentFile().mkdirs();
+                        FileOutputStream fos2 = new FileOutputStream(mcFile);
+                        try {
+                            for (Object spray : sprays) {
+                                if (spray == null) continue;
+                                Method writeDelimited = spray.getClass().getMethod("writeDelimitedTo", OutputStream.class);
+                                writeDelimited.invoke(spray, fos2);
+                            }
+                        } finally {
+                            fos2.close();
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {}
+    }
+
+    // ---------------------------------------------------------
+    // Bytecode Class Patcher (pure Java, zero external dependencies)
+    // ---------------------------------------------------------
+
+    private static byte[] loadClassBytes(ClassLoader cl, String resourcePath) {
+        try {
+            InputStream is = cl.getResourceAsStream(resourcePath);
+            if (is == null) is = cl.getResourceAsStream("/" + resourcePath);
+            if (is == null) is = ClassLoader.getSystemResourceAsStream(resourcePath);
+            if (is == null) {
+                try {
+                    String className = resourcePath.replace('/', '.');
+                    if (className.endsWith(".class")) className = className.substring(0, className.length() - 6);
+                    Class<?> loaded = cl.loadClass(className);
+                    if (loaded != null && loaded.getProtectionDomain() != null && loaded.getProtectionDomain().getCodeSource() != null) {
+                        java.net.URL url = loaded.getProtectionDomain().getCodeSource().getLocation();
+                        if (url != null) {
+                            java.util.jar.JarFile zf = new java.util.jar.JarFile(new File(url.toURI()));
+                            try {
+                                java.util.zip.ZipEntry ze = zf.getEntry(resourcePath);
+                                if (ze != null) {
+                                    InputStream zis = zf.getInputStream(ze);
+                                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                                    byte[] buf = new byte[4096];
+                                    int n;
+                                    while ((n = zis.read(buf)) > 0) bos.write(buf, 0, n);
+                                    zis.close();
+                                    return bos.toByteArray();
+                                }
+                            } finally {
+                                zf.close();
+                            }
+                        }
+                    }
+                } catch (Throwable ignored) {}
+            }
+            if (is == null) return null;
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = is.read(buf)) > 0) {
+                bos.write(buf, 0, n);
+            }
+            is.close();
+            return bos.toByteArray();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static byte[] patchStubClassBytes(byte[] data, String targetClassName, String[][] methodPatches) {
+        try {
+            int magic = readU4(data, 0);
+            if (magic != 0xCAFEBABE) return null;
+
+            int cpCount = readU2(data, 8);
+            int offset = 10;
+
+            String[] utf8Strings = new String[cpCount + methodPatches.length * 6 + 10];
+            int i = 1;
+            while (i < cpCount) {
+                int tag = data[offset++] & 0xFF;
+                if (tag == 1) { // Utf8
+                    int len = readU2(data, offset);
+                    offset += 2;
+                    utf8Strings[i] = new String(data, offset, len, "UTF-8");
+                    offset += len;
+                } else if (tag == 3 || tag == 4) { // Int, Float
+                    offset += 4;
+                } else if (tag == 5 || tag == 6) { // Long, Double
+                    offset += 8;
+                    i++;
+                } else if (tag == 7 || tag == 8) { // Class, String
+                    offset += 2;
+                } else if (tag == 9 || tag == 10 || tag == 11) { // Fieldref, Methodref, InterfaceMethodref
+                    offset += 4;
+                } else if (tag == 12) { // NameAndType
+                    offset += 4;
+                } else if (tag == 15) { // MethodHandle
+                    offset += 3;
+                } else if (tag == 16 || tag == 18) { // MethodType, InvokeDynamic
+                    offset += 4;
+                } else {
+                    return null;
+                }
+                i++;
+            }
+
+            int cpEndOffset = offset;
+
+            ByteArrayOutputStream newCpOut = new ByteArrayOutputStream();
+            int curCp = cpCount;
+
+            int helperUtf8Idx = curCp++;
+            writeUtf8(newCpOut, targetClassName);
+
+            int helperClassIdx = curCp++;
+            writeClass(newCpOut, helperUtf8Idx);
+
+            Map<String, Integer> methodRefMap = new HashMap<String, Integer>();
+            for (int p = 0; p < methodPatches.length; p++) {
+                String mName = methodPatches[p][0];
+                String mDesc = methodPatches[p][1];
+                String helperMethodName = methodPatches[p][2];
+
+                int nameIdx = curCp++;
+                writeUtf8(newCpOut, helperMethodName);
+
+                int descIdx = curCp++;
+                String helperDesc = (methodPatches[p].length > 3) ? methodPatches[p][3] : "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V";
+                writeUtf8(newCpOut, helperDesc);
+
+                int ntIdx = curCp++;
+                writeNameAndType(newCpOut, nameIdx, descIdx);
+
+                int mrefIdx = curCp++;
+                writeMethodref(newCpOut, helperClassIdx, ntIdx);
+
+                methodRefMap.put(mName + "|" + mDesc, mrefIdx);
+            }
+
+            ByteArrayOutputStream result = new ByteArrayOutputStream(data.length + 1024);
+            // Header
+            result.write(data, 0, 8);
+            writeU2(result, curCp);
+            // Original CP
+            result.write(data, 10, cpEndOffset - 10);
+            // Appended CP
+            byte[] newCpBytes = newCpOut.toByteArray();
+            result.write(newCpBytes, 0, newCpBytes.length);
+
+            // Rest of class
+            int rOff = cpEndOffset;
+            int accessFlags = readU2(data, rOff); rOff += 2;
+            int thisClass = readU2(data, rOff); rOff += 2;
+            int superClass = readU2(data, rOff); rOff += 2;
+            int ifCount = readU2(data, rOff); rOff += 2;
+            rOff += ifCount * 2;
+
+            int fieldsCount = readU2(data, rOff); rOff += 2;
+            for (int f = 0; f < fieldsCount; f++) {
+                rOff += 6;
+                int fAttrCnt = readU2(data, rOff); rOff += 2;
+                for (int a = 0; a < fAttrCnt; a++) {
+                    rOff += 2;
+                    int aLen = readU4(data, rOff); rOff += 4 + aLen;
+                }
+            }
+
+            int methodsCount = readU2(data, rOff); rOff += 2;
+
+            // Copy up to methods count
+            result.write(data, cpEndOffset, rOff - cpEndOffset);
+
+            for (int m = 0; m < methodsCount; m++) {
+                int mStart = rOff;
+                int mAcc = readU2(data, rOff); rOff += 2;
+                int mName = readU2(data, rOff); rOff += 2;
+                int mDesc = readU2(data, rOff); rOff += 2;
+                int mAttrCnt = readU2(data, rOff); rOff += 2;
+
+                String nameStr = utf8Strings[mName];
+                String descStr = utf8Strings[mDesc];
+                String key = nameStr + "|" + descStr;
+
+                if (methodRefMap.containsKey(key)) {
+                    int targetMref = methodRefMap.get(key);
+                    writeU2(result, mAcc);
+                    writeU2(result, mName);
+                    writeU2(result, mDesc);
+                    writeU2(result, mAttrCnt);
+
+                    for (int a = 0; a < mAttrCnt; a++) {
+                        int aStart = rOff;
+                        int aName = readU2(data, rOff); rOff += 2;
+                        int aLen = readU4(data, rOff); rOff += 4;
+                        String attrName = utf8Strings[aName];
+                        if ("Code".equals(attrName)) {
+                            byte[] newCode = new byte[] {
+                                0x2B, 0x2C, 0x2D,
+                                (byte) 0xB8, (byte) ((targetMref >> 8) & 0xFF), (byte) (targetMref & 0xFF),
+                                (byte) 0xB1
+                            };
+                            writeU2(result, aName);
+                            writeU4(result, 12 + newCode.length);
+                            writeU2(result, 3);
+                            writeU2(result, 4);
+                            writeU4(result, newCode.length);
+                            result.write(newCode, 0, newCode.length);
+                            writeU2(result, 0);
+                            writeU2(result, 0);
+                            rOff += aLen;
+                        } else {
+                            result.write(data, aStart, 6 + aLen);
+                            rOff += aLen;
+                        }
+                    }
+                } else {
+                    for (int a = 0; a < mAttrCnt; a++) {
+                        rOff += 2;
+                        int aLen = readU4(data, rOff); rOff += 4 + aLen;
+                    }
+                    result.write(data, mStart, rOff - mStart);
+                }
+            }
+
+            result.write(data, rOff, data.length - rOff);
+            return result.toByteArray();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static int readU2(byte[] b, int off) {
+        return ((b[off] & 0xFF) << 8) | (b[off + 1] & 0xFF);
+    }
+
+    private static int readU4(byte[] b, int off) {
+        return ((b[off] & 0xFF) << 24) | ((b[off + 1] & 0xFF) << 16) | ((b[off + 2] & 0xFF) << 8) | (b[off + 3] & 0xFF);
+    }
+
+    private static void writeU2(ByteArrayOutputStream out, int val) {
+        out.write((val >> 8) & 0xFF);
+        out.write(val & 0xFF);
+    }
+
+    private static void writeU4(ByteArrayOutputStream out, int val) {
+        out.write((val >> 24) & 0xFF);
+        out.write((val >> 16) & 0xFF);
+        out.write((val >> 8) & 0xFF);
+        out.write(val & 0xFF);
+    }
+
+    private static void writeUtf8(ByteArrayOutputStream out, String s) throws Exception {
+        byte[] bytes = s.getBytes("UTF-8");
+        out.write(1);
+        writeU2(out, bytes.length);
+        out.write(bytes, 0, bytes.length);
+    }
+
+    private static void writeClass(ByteArrayOutputStream out, int nameIdx) {
+        out.write(7);
+        writeU2(out, nameIdx);
+    }
+
+    private static void writeNameAndType(ByteArrayOutputStream out, int nameIdx, int descIdx) {
+        out.write(12);
+        writeU2(out, nameIdx);
+        writeU2(out, descIdx);
+    }
+
+    private static void writeMethodref(ByteArrayOutputStream out, int classIdx, int ntIdx) {
+        out.write(10);
+        writeU2(out, classIdx);
+        writeU2(out, ntIdx);
     }
 }

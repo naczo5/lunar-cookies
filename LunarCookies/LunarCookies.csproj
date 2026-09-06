@@ -15,7 +15,7 @@
     <Product>Lunar Cookie Account Switcher</Product>
     <Description>Version-adaptive cookie/Localts account switcher for Minecraft clients</Description>
     <ApplicationIcon>Assets\LunarCookies.ico</ApplicationIcon>
-    <VersionPrefix>1.0.0</VersionPrefix>
+    <VersionPrefix>2.2.0</VersionPrefix>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <Platforms>x64</Platforms>
     <PlatformTarget>x64</PlatformTarget>

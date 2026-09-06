@@ -41,6 +41,7 @@
         <Setter Property="CornerRadius" Value="6"/>
         <Setter Property="Padding" Value="16,9"/>
       </Style>
+      <Style x:Key="PrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource BrandButtonStyle}"/>
 
       <Style x:Key="CardButtonStyle" TargetType="Button">
         <Setter Property="CornerRadius" Value="6"/>

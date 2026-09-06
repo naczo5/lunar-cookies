@@ -15,3 +15,6 @@ _refs/
 cookies/
 mappings/
 .vs/
+*.class
+*.zip
+.agents/

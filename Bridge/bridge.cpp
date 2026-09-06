@@ -28,6 +28,9 @@ static jmethodID g_getInfoMethod = nullptr;
 static jmethodID g_joinServerMethod = nullptr;
 static jmethodID g_hintMethod = nullptr;
 static jmethodID g_hintConnectMethod = nullptr;
+static jmethodID g_patchCosmeticsMethod = nullptr;
+static jmethodID g_isCosmeticsPatchedMethod = nullptr;
+static jmethodID g_getCosmeticsStatusMethod = nullptr;
 static jobject g_gameClassLoader = nullptr;
 static std::vector<jobject> g_loaderCandidates;
 static CRITICAL_SECTION g_logCs;
@@ -123,6 +126,61 @@ static jclass LoadClassWithLoader(JNIEnv* env, jobject cl, const char* dotName) 
     return result;
 }
 
+static jvmtiEnv* GetJvmti() {
+    if (!g_jvm) return nullptr;
+    jvmtiEnv* jvmti = nullptr;
+    if (g_jvm->GetEnv((void**)&jvmti, JVMTI_VERSION_1_2) == JNI_OK && jvmti) {
+        jvmtiCapabilities caps;
+        memset(&caps, 0, sizeof(caps));
+        caps.can_redefine_classes = 1;
+        jvmtiError err = jvmti->AddCapabilities(&caps);
+        if (err != JVMTI_ERROR_NONE && err != JVMTI_ERROR_NOT_AVAILABLE) {
+            char buf[80];
+            snprintf(buf, sizeof(buf), "AddCapabilities(can_redefine_classes) err=%d", (int)err);
+            Log(buf);
+        }
+        return jvmti;
+    }
+    return nullptr;
+}
+
+static jboolean JNICALL NativeRedefineClass(JNIEnv* env, jclass /*callerClass*/, jclass targetClass, jbyteArray classBytes) {
+    if (!env || !targetClass || !classBytes) return JNI_FALSE;
+    jvmtiEnv* jvmti = GetJvmti();
+    if (!jvmti) {
+        Log("NativeRedefineClass: jvmti unavailable");
+        return JNI_FALSE;
+    }
+
+    jsize len = env->GetArrayLength(classBytes);
+    if (len <= 0) return JNI_FALSE;
+
+    jbyte* bytes = env->GetByteArrayElements(classBytes, nullptr);
+    if (!bytes) return JNI_FALSE;
+
+    jvmtiClassDefinition def;
+    def.klass = targetClass;
+    def.class_byte_count = (jint)len;
+    def.class_bytes = (const unsigned char*)bytes;
+
+    jvmtiError err = jvmti->RedefineClasses(1, &def);
+    env->ReleaseByteArrayElements(classBytes, bytes, JNI_ABORT);
+
+    if (err != JVMTI_ERROR_NONE) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "RedefineClasses failed err=%d", (int)err);
+        Log(buf);
+        return JNI_FALSE;
+    }
+
+    Log("RedefineClasses succeeded");
+    return JNI_TRUE;
+}
+
+static const JNINativeMethod s_nativeMethods[] = {
+    { (char*)"nativeRedefineClass", (char*)"(Ljava/lang/Class;[B)Z", (void*)NativeRedefineClass }
+};
+
 // Lunar (especially the ichor subsystem) uses multiple nested classloaders.
 // Picking the first interesting class' loader is unreliable — a Lunar-internal
 // lambda can hand back a loader whose view of net.minecraft classes lacks the
@@ -132,8 +190,8 @@ static bool DiscoverClassLoaderCandidates(JNIEnv* env) {
     if (!g_loaderCandidates.empty()) return true;
     if (!g_jvm || !env) return false;
 
-    jvmtiEnv* jvmti = nullptr;
-    if (g_jvm->GetEnv((void**)&jvmti, JVMTI_VERSION_1_2) != JNI_OK || !jvmti) {
+    jvmtiEnv* jvmti = GetJvmti();
+    if (!jvmti) {
         Log("JVMTI unavailable");
         return false;
     }
@@ -322,6 +380,9 @@ struct HelperMethods {
     jmethodID joinServer;
     jmethodID hint;
     jmethodID hintConnect;
+    jmethodID patchCosmetics;
+    jmethodID isCosmeticsPatched;
+    jmethodID getCosmeticsStatus;
 };
 
 static bool CommitHelper(JNIEnv* env, jclass defined, const HelperMethods& methods, jobject loader) {
@@ -336,6 +397,9 @@ static bool CommitHelper(JNIEnv* env, jclass defined, const HelperMethods& metho
     g_joinServerMethod = methods.joinServer;
     g_hintMethod = methods.hint;
     g_hintConnectMethod = methods.hintConnect;
+    g_patchCosmeticsMethod = methods.patchCosmetics;
+    g_isCosmeticsPatchedMethod = methods.isCosmeticsPatched;
+    g_getCosmeticsStatusMethod = methods.getCosmeticsStatus;
     return g_helperClass != nullptr && g_gameClassLoader != nullptr;
 }
 
@@ -373,6 +437,9 @@ static int TryLoader(JNIEnv* env, jobject cl, std::string& initResult) {
         defined = LoadClassWithLoader(env, cl, "com.lunarcookies.SessionSwitcher");
     if (!defined) return -1;
 
+    env->RegisterNatives(defined, s_nativeMethods, (jint)(sizeof(s_nativeMethods) / sizeof(s_nativeMethods[0])));
+    if (env->ExceptionCheck()) env->ExceptionClear();
+
     HelperMethods m;
     m.init = env->GetStaticMethodID(defined, "init", "()Ljava/lang/String;");
     m.setSession = env->GetStaticMethodID(defined, "setSession",
@@ -384,6 +451,9 @@ static int TryLoader(JNIEnv* env, jobject cl, std::string& initResult) {
     m.hint = env->GetStaticMethodID(defined, "hint", "(Ljava/lang/String;Ljava/lang/String;)V");
     m.hintConnect = env->GetStaticMethodID(defined, "hintConnect",
         "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+    m.patchCosmetics = env->GetStaticMethodID(defined, "patchCosmetics", "()Ljava/lang/String;");
+    m.isCosmeticsPatched = env->GetStaticMethodID(defined, "isCosmeticsPatched", "()Z");
+    m.getCosmeticsStatus = env->GetStaticMethodID(defined, "getCosmeticsStatus", "()Ljava/lang/String;");
 
     bool resolved = !env->ExceptionCheck() && m.init && m.setSession && m.restore
         && m.getInfo && m.joinServer && m.hint && m.hintConnect;
@@ -458,6 +528,9 @@ static bool DefineHelper(JNIEnv* env) {
                     defined = LoadClassWithLoader(env, g_loaderCandidates[j], "com.lunarcookies.SessionSwitcher");
                 if (!defined) continue;
 
+                env->RegisterNatives(defined, s_nativeMethods, (jint)(sizeof(s_nativeMethods) / sizeof(s_nativeMethods[0])));
+                if (env->ExceptionCheck()) env->ExceptionClear();
+
                 HelperMethods m;
                 m.init = env->GetStaticMethodID(defined, "init", "()Ljava/lang/String;");
                 m.setSession = env->GetStaticMethodID(defined, "setSession",
@@ -469,6 +542,9 @@ static bool DefineHelper(JNIEnv* env) {
                 m.hint = env->GetStaticMethodID(defined, "hint", "(Ljava/lang/String;Ljava/lang/String;)V");
                 m.hintConnect = env->GetStaticMethodID(defined, "hintConnect",
                     "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V");
+                m.patchCosmetics = env->GetStaticMethodID(defined, "patchCosmetics", "()Ljava/lang/String;");
+                m.isCosmeticsPatched = env->GetStaticMethodID(defined, "isCosmeticsPatched", "()Z");
+                m.getCosmeticsStatus = env->GetStaticMethodID(defined, "getCosmeticsStatus", "()Ljava/lang/String;");
                 bool okMethods = !env->ExceptionCheck() && m.init && m.setSession && m.restore
                     && m.getInfo && m.joinServer && m.hint && m.hintConnect;
                 if (env->ExceptionCheck()) env->ExceptionClear();
@@ -604,10 +680,13 @@ static std::string HandleCommand(JNIEnv* env, const std::string& line) {
             return "{\"ok\":false,\"error\":\"" + JsonEscape(err) + "\"}\n";
         }
         bool inWorld = parts[3] == "true";
+        bool cosmeticsPatched = (parts.size() > 5 && parts[5] == "true");
         return "{\"ok\":true,\"username\":\"" + JsonEscape(parts[1])
             + "\",\"uuid\":\"" + JsonEscape(parts[2])
             + "\",\"inWorld\":" + (inWorld ? "true" : "false")
-            + ",\"ready\":true}\n";
+            + ",\"ready\":true"
+            + ",\"cosmeticsPatched\":" + (cosmeticsPatched ? "true" : "false")
+            + "}\n";
     }
 
     if (op == "setSession") {
@@ -673,6 +752,43 @@ static std::string HandleCommand(JNIEnv* env, const std::string& line) {
         }
         std::string err = result.rfind("error:", 0) == 0 ? result.substr(6) : result;
         return "{\"ok\":false,\"error\":\"" + JsonEscape(err) + "\"}\n";
+    }
+
+    if (op == "patchCosmetics") {
+        if (!g_patchCosmeticsMethod) {
+            return "{\"ok\":false,\"error\":\"Cosmetics patcher method not found\"}\n";
+        }
+        jstring r = (jstring)env->CallStaticObjectMethod(g_helperClass, g_patchCosmeticsMethod);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return "{\"ok\":false,\"error\":\"patchCosmetics exception\"}\n";
+        }
+        std::string result = JStringToUtf8(env, r);
+        if (r) env->DeleteLocalRef(r);
+        if (result.rfind("ok:", 0) == 0) {
+            return "{\"ok\":true,\"message\":\"" + JsonEscape(result.substr(3)) + "\",\"cosmeticsPatched\":true}\n";
+        }
+        std::string err = result.rfind("error:", 0) == 0 ? result.substr(6) : result;
+        return "{\"ok\":false,\"error\":\"" + JsonEscape(err) + "\",\"cosmeticsPatched\":false}\n";
+    }
+
+    if (op == "getCosmeticsStatus") {
+        bool patched = false;
+        std::string details = "Not patched";
+        if (g_isCosmeticsPatchedMethod) {
+            patched = env->CallStaticBooleanMethod(g_helperClass, g_isCosmeticsPatchedMethod) == JNI_TRUE;
+            if (env->ExceptionCheck()) env->ExceptionClear();
+        }
+        if (g_getCosmeticsStatusMethod) {
+            jstring r = (jstring)env->CallStaticObjectMethod(g_helperClass, g_getCosmeticsStatusMethod);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            else if (r) {
+                details = JStringToUtf8(env, r);
+                env->DeleteLocalRef(r);
+            }
+        }
+        return "{\"ok\":true,\"cosmeticsPatched\":" + std::string(patched ? "true" : "false")
+            + ",\"details\":\"" + JsonEscape(details) + "\"}\n";
     }
 
     return "{\"ok\":false,\"error\":\"unknown op\"}\n";

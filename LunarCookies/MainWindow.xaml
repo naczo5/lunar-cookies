@@ -89,6 +89,11 @@
             <FontIcon Glyph="&#xE774;"/>
           </NavigationViewItem.Icon>
         </NavigationViewItem>
+        <NavigationViewItem Content="Cosmetics" Tag="cosmetics">
+          <NavigationViewItem.Icon>
+            <FontIcon Glyph="&#xE8EC;"/>
+          </NavigationViewItem.Icon>
+        </NavigationViewItem>
         <NavigationViewItem Content="Injection" Tag="injection">
           <NavigationViewItem.Icon>
             <FontIcon Glyph="&#xE90F;"/>
@@ -531,6 +536,178 @@
           </Border>
         </Grid>
 
+        <Grid x:Name="CosmeticsPage" Margin="20,12,20,20" Visibility="Collapsed">
+          <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="16">
+              <StackPanel Spacing="3">
+                <TextBlock Text="Lunar Cosmetics Unlocker" Style="{StaticResource TitleTextBlockStyle}"/>
+                <TextBlock Text="Unlock every cosmetic, cloak, wing, emote, badge, and spray on Lunar Client."
+                           Foreground="{ThemeResource SecondaryTextBrush}"/>
+              </StackPanel>
+
+              <Border Padding="20" CornerRadius="10"
+                      Background="{ThemeResource CardBackgroundBrush}"
+                      BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+                <Grid RowSpacing="16">
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+
+                  <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <Border Width="48" Height="48" CornerRadius="24"
+                            Background="{StaticResource BrandGreenBrush}">
+                      <FontIcon Glyph="&#xE8EC;" FontSize="22" Foreground="White"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                      <TextBlock Text="Cosmetics Patcher" FontSize="18" FontWeight="SemiBold"/>
+                      <TextBlock Text="{Binding CosmeticsDetails}" TextWrapping="Wrap"
+                                 Foreground="{ThemeResource SecondaryTextBrush}"/>
+                    </StackPanel>
+
+                    <Border Grid.Column="2" Padding="12,6" CornerRadius="14"
+                            Background="{ThemeResource SubtleBackgroundBrush}"
+                            VerticalAlignment="Center">
+                      <StackPanel Orientation="Horizontal" Spacing="7">
+                        <FontIcon Glyph="&#xE73E;" FontSize="12" Foreground="{StaticResource BrandGreenBrush}"/>
+                        <TextBlock Text="{Binding CosmeticsBadgeText}" FontSize="12" FontWeight="SemiBold"
+                                   VerticalAlignment="Center"/>
+                      </StackPanel>
+                    </Border>
+                  </Grid>
+
+                  <Rectangle Grid.Row="1" Height="1" Fill="{ThemeResource CardBorderBrush}"/>
+
+                  <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="10">
+                    <Button Style="{StaticResource BrandButtonStyle}"
+                            IsEnabled="{Binding CanPatchCosmetics}"
+                            Click="PatchCosmetics_Click">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8EC;" FontSize="14"/>
+                        <TextBlock Text="Unlock / Re-patch Cosmetics"/>
+                      </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource CardButtonStyle}"
+                            IsEnabled="{Binding IsNotBusy}"
+                            Click="RefreshCosmeticsStatus_Click">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE72C;" FontSize="14"/>
+                        <TextBlock Text="Refresh status"/>
+                      </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource CardButtonStyle}"
+                            Click="OpenSavedCosmeticsFolder_Click">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8B7;" FontSize="14"/>
+                        <TextBlock Text="Open saved outfits folder"/>
+                      </StackPanel>
+                    </Button>
+                  </StackPanel>
+                </Grid>
+              </Border>
+
+              <Grid ColumnSpacing="12" RowSpacing="12">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Grid.Column="0" Padding="16" CornerRadius="10"
+                        Background="{ThemeResource CardBackgroundBrush}"
+                        BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+                  <StackPanel Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <FontIcon Glyph="&#xEB9F;" FontSize="16" Foreground="{StaticResource BrandGreenBrush}"/>
+                      <TextBlock Text="All Cloaks &amp; Cosmetics" FontWeight="SemiBold" FontSize="15"/>
+                    </StackPanel>
+                    <TextBlock Text="Wings, bandanas, masks, body cosmetics, backpacks, hats, pets, and dragon wings unlocked in the Lunar Cosmetics menu."
+                               TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                  </StackPanel>
+                </Border>
+
+                <Border Grid.Row="0" Grid.Column="1" Padding="16" CornerRadius="10"
+                        Background="{ThemeResource CardBackgroundBrush}"
+                        BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+                  <StackPanel Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <FontIcon Glyph="&#xE790;" FontSize="16" Foreground="{StaticResource BrandGreenBrush}"/>
+                      <TextBlock Text="Lunar Artist Tools &amp; Capes" FontWeight="SemiBold" FontSize="15"/>
+                    </StackPanel>
+                    <TextBlock Text="Developer cosmetics, Lunar artist capes, and special promotional accessories automatically unlocked."
+                               TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                  </StackPanel>
+                </Border>
+
+                <Border Grid.Row="1" Grid.Column="0" Padding="16" CornerRadius="10"
+                        Background="{ThemeResource CardBackgroundBrush}"
+                        BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+                  <StackPanel Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <FontIcon Glyph="&#xE8D6;" FontSize="16" Foreground="{StaticResource BrandGreenBrush}"/>
+                      <TextBlock Text="All Emotes &amp; Dances" FontWeight="SemiBold" FontSize="15"/>
+                    </StackPanel>
+                    <TextBlock Text="Every emote in Lunar Client is unlocked in your emote wheel and usable in both multiplayer and singleplayer."
+                               TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                  </StackPanel>
+                </Border>
+
+                <Border Grid.Row="1" Grid.Column="1" Padding="16" CornerRadius="10"
+                        Background="{ThemeResource CardBackgroundBrush}"
+                        BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+                  <StackPanel Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <FontIcon Glyph="&#xE734;" FontSize="16" Foreground="{StaticResource BrandGreenBrush}"/>
+                      <TextBlock Text="All Profile Badges" FontWeight="SemiBold" FontSize="15"/>
+                    </StackPanel>
+                    <TextBlock Text="All Lunar profile badges unlocked. Equip any badge to show next to your player name."
+                               TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                  </StackPanel>
+                </Border>
+
+                <Border Grid.Row="2" Grid.Column="0" Padding="16" CornerRadius="10"
+                        Background="{ThemeResource CardBackgroundBrush}"
+                        BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+                  <StackPanel Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <FontIcon Glyph="&#xE90B;" FontSize="16" Foreground="{StaticResource BrandGreenBrush}"/>
+                      <TextBlock Text="All Sprays" FontWeight="SemiBold" FontSize="15"/>
+                    </StackPanel>
+                    <TextBlock Text="The complete collection of sprays unlocked and ready to spray on blocks across all servers."
+                               TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                  </StackPanel>
+                </Border>
+
+                <Border Grid.Row="2" Grid.Column="1" Padding="16" CornerRadius="10"
+                        Background="{ThemeResource CardBackgroundBrush}"
+                        BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+                  <StackPanel Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <FontIcon Glyph="&#xE74E;" FontSize="16" Foreground="{StaticResource BrandGreenBrush}"/>
+                      <TextBlock Text="Local Outfit Persistence" FontWeight="SemiBold" FontSize="15"/>
+                    </StackPanel>
+                    <TextBlock Text="Equipped outfits, badges, emotes, and sprays are saved to prometheus/saved/ and restored across game restarts."
+                               TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                  </StackPanel>
+                </Border>
+              </Grid>
+            </StackPanel>
+          </ScrollViewer>
+        </Grid>
+
         <Grid x:Name="SettingsPage" Margin="20,12,20,20" Visibility="Collapsed">
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -595,6 +772,24 @@
                 </StackPanel>
                 <ToggleSwitch Grid.Column="1" x:Name="PopulateLunarAccountManagerToggle"
                               IsOn="{Binding PopulateLunarAccountManager, Mode=TwoWay}"
+                              Toggled="SettingsToggle_Toggled"/>
+              </Grid>
+
+              <Rectangle Height="1" Fill="{ThemeResource CardBorderBrush}"/>
+
+              <Grid ColumnSpacing="20">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="4">
+                  <TextBlock Text="Auto-unlock Lunar cosmetics on connect"
+                             FontSize="16" FontWeight="SemiBold"/>
+                  <TextBlock Text="Automatically patch Lunar Client cosmetics, emotes, badges, and sprays as soon as the session bridge connects to Minecraft."
+                             TextWrapping="Wrap" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                </StackPanel>
+                <ToggleSwitch Grid.Column="1" x:Name="AutoUnlockCosmeticsToggle"
+                              IsOn="{Binding AutoUnlockCosmetics, Mode=TwoWay}"
                               Toggled="SettingsToggle_Toggled"/>
               </Grid>
             </StackPanel>

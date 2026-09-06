@@ -9,6 +9,9 @@ In-Game Account Switcher. In-Game Account Switcher is copyright (C) 2015-2022
 The_Fireplace and copyright (C) 2021-2026 VidTu and is distributed under the
 GNU Lesser General Public License version 3 or later.
 
+Cosmetics unlocker and RPC response definitions are based on the Prometheus patch
+for Lunar Client by prometheusreengineering (https://github.com/prometheusreengineering/minecraft-lunar).
+
 Minecraft, Microsoft, Xbox, Lunar Client, and other referenced names and marks
 belong to their respective owners. This project is not affiliated with or
 endorsed by those owners.

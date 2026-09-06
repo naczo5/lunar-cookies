@@ -12,6 +12,7 @@ public sealed class BridgeSessionInfo
     public string Uuid { get; init; } = "";
     public bool InWorld { get; init; }
     public bool Ready { get; init; }
+    public bool CosmeticsPatched { get; init; }
     public string Error { get; init; } = "";
 }
 
@@ -19,6 +20,14 @@ public sealed class BridgeJoinResult
 {
     public bool Ok { get; init; }
     public string Address { get; init; } = "";
+    public string Error { get; init; } = "";
+}
+
+public sealed class BridgeCosmeticsResult
+{
+    public bool Ok { get; init; }
+    public string Message { get; init; } = "";
+    public bool CosmeticsPatched { get; init; }
     public string Error { get; init; } = "";
 }
 
@@ -127,6 +136,36 @@ public sealed class BridgeClient : IDisposable
         };
     }
 
+    public async Task<BridgeCosmeticsResult?> PatchCosmeticsAsync(CancellationToken ct = default)
+    {
+        var resp = await SendAsync(new { op = "patchCosmetics" }, ct).ConfigureAwait(false);
+        if (resp == null)
+            return null;
+
+        return new BridgeCosmeticsResult
+        {
+            Ok = resp["ok"]?.GetValue<bool>() ?? false,
+            Message = resp["message"]?.GetValue<string>() ?? "",
+            CosmeticsPatched = resp["cosmeticsPatched"]?.GetValue<bool>() ?? false,
+            Error = resp["error"]?.GetValue<string>() ?? ""
+        };
+    }
+
+    public async Task<BridgeCosmeticsResult?> GetCosmeticsStatusAsync(CancellationToken ct = default)
+    {
+        var resp = await SendAsync(new { op = "getCosmeticsStatus" }, ct).ConfigureAwait(false);
+        if (resp == null)
+            return null;
+
+        return new BridgeCosmeticsResult
+        {
+            Ok = resp["ok"]?.GetValue<bool>() ?? false,
+            Message = resp["details"]?.GetValue<string>() ?? "",
+            CosmeticsPatched = resp["cosmeticsPatched"]?.GetValue<bool>() ?? false,
+            Error = resp["error"]?.GetValue<string>() ?? ""
+        };
+    }
+
     private static BridgeSessionInfo? ParseSession(JsonNode? resp)
     {
         if (resp == null)
@@ -139,6 +178,7 @@ public sealed class BridgeClient : IDisposable
             Uuid = resp["uuid"]?.GetValue<string>() ?? "",
             InWorld = resp["inWorld"]?.GetValue<bool>() ?? false,
             Ready = resp["ready"]?.GetValue<bool>() ?? false,
+            CosmeticsPatched = resp["cosmeticsPatched"]?.GetValue<bool>() ?? false,
             Error = resp["error"]?.GetValue<string>() ?? ""
         };
     }
