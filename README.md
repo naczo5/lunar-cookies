@@ -46,10 +46,10 @@ bridge will not write to a guessed field.
   HTTP status without logging cookies, tokens, or response bodies.
 - **Injection** contains bridge connection controls, current Lunar session
   details, process detection, and the diagnostic log.
-- **Settings** controls minimize-to-tray behavior, automatic cosmetic unlocking
-  on injection or switch, whether the switcher exits automatically after the
-  detected Minecraft process closes, and an optional attempt to populate Lunar
-  Client's local account manager. That last setting is off by default.
+- **Settings** controls minimize-to-tray behavior, an optional setting to
+  auto-unlock cosmetics on injection or switch (off by default), whether the
+  switcher exits automatically after the detected Minecraft process closes, and
+  an optional attempt to populate Lunar Client's local account manager (off by default).
 - Switching accounts automatically injects or reconnects the bridge when
   needed. Switching and restoration are blocked while Lunar is in a world or
   connected to a server.
@@ -191,7 +191,7 @@ Lunar Cookies includes an in-memory cosmetic unlocker for Lunar Client:
   game launches.
 - **Auto-unlock**: Can be triggered manually from the **Cosmetics** tab or set
   to unlock automatically whenever the bridge connects or an account is switched
-  via **Settings**.
+  via **Settings** (off by default).
 
 ## Compatibility design
 

@@ -107,7 +107,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool _isCosmeticsUnlocked;
     private string _cosmeticsStatus = "Not patched";
     private string _cosmeticsDetails = "Lunar Client websocket services have not been patched yet.";
-    private bool _autoUnlockCosmetics = true;
+    private bool _autoUnlockCosmetics;
 
     public ObservableCollection<AccountCardViewModel> Accounts { get; } = new();
     public ObservableCollection<ServerCardViewModel> Servers { get; } = new();
