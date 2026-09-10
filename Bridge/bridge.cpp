@@ -230,6 +230,7 @@ static bool DiscoverClassLoaderCandidates(JNIEnv* env) {
                 || strcmp(sig, "Lnet/minecraft/client/session/Session;") == 0
                 || strcmp(sig, "Lnet/minecraft/client/User;") == 0
                 || strcmp(sig, "Lnet/minecraft/class_320;") == 0
+                || strcmp(sig, "Lavm;") == 0
                 || strcmp(sig, "Lbhl;") == 0
                 || strcmp(sig, "Lbhm;") == 0) {
                 tier = 1;
@@ -238,6 +239,7 @@ static bool DiscoverClassLoaderCandidates(JNIEnv* env) {
             // Lunar internals) — kept as last-resort candidates only.
             else if (strstr(sig, "ConnectScreen;")
                 || strstr(sig, "GuiConnecting;")
+                || strcmp(sig, "Lawz;") == 0
                 || strstr(sig, "com/mojang/authlib")
                 || strstr(sig, "com/moonsworth/lunar")) {
                 tier = 2;
@@ -250,7 +252,10 @@ static bool DiscoverClassLoaderCandidates(JNIEnv* env) {
                 bool duplicate = false;
                 for (Candidate& existing : found) {
                     if (env->IsSameObject(existing.loader, loader)) {
-                        if (tier < existing.tier) existing.tier = tier;
+                        if (tier < existing.tier) {
+                            existing.tier = tier;
+                            existing.sig = sig;
+                        }
                         duplicate = true;
                         break;
                     }
@@ -305,24 +310,24 @@ static void DiscoverClassHints(JNIEnv* env, jvmtiEnv* jvmti) {
                 std::string s(sig + 1);
                 if (!s.empty() && s.back() == ';') s.pop_back();
                 for (char& ch : s) if (ch == '/') ch = '.';
-                mcDot = s;
+                if (mcDot.empty() || s.find('.') != std::string::npos) mcDot = s;
             }
             if (strcmp(sig, "Lnet/minecraft/util/Session;") == 0
                 || strcmp(sig, "Lnet/minecraft/client/session/Session;") == 0
                 || strcmp(sig, "Lnet/minecraft/client/User;") == 0
                 || strcmp(sig, "Lnet/minecraft/class_320;") == 0
+                || strcmp(sig, "Lavm;") == 0
                 || strcmp(sig, "Lbhl;") == 0
                 || strcmp(sig, "Lbhm;") == 0) {
                 std::string s(sig + 1);
                 if (!s.empty() && s.back() == ';') s.pop_back();
                 for (char& ch : s) if (ch == '/') ch = '.';
-                sessionDot = s;
+                if (sessionDot.empty() || s == "avm") sessionDot = s;
             }
             if (strstr(sig, "ConnectScreen;")
                 || strstr(sig, "GuiConnecting;")
                 || strcmp(sig, "Lnet/minecraft/class_412;") == 0
-                || strcmp(sig, "Lawz;") == 0
-                || strcmp(sig, "Laxk;") == 0) {
+                || strcmp(sig, "Lawz;") == 0) {
                 std::string s(sig + 1);
                 if (!s.empty() && s.back() == ';') s.pop_back();
                 for (char& ch : s) if (ch == '/') ch = '.';
@@ -338,7 +343,9 @@ static void DiscoverClassHints(JNIEnv* env, jvmtiEnv* jvmti) {
             }
             if (strstr(sig, "multiplayer/ServerData;")
                 || strstr(sig, "network/ServerInfo;")
-                || strcmp(sig, "Lnet/minecraft/class_642;") == 0) {
+                || strcmp(sig, "Lnet/minecraft/class_642;") == 0
+                || strcmp(sig, "Lbde;") == 0
+                || strcmp(sig, "Lbno;") == 0) {
                 std::string s(sig + 1);
                 if (!s.empty() && s.back() == ';') s.pop_back();
                 for (char& ch : s) if (ch == '/') ch = '.';

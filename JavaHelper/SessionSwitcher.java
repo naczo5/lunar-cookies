@@ -89,13 +89,22 @@ public final class SessionSwitcher {
             screenField = findScreenField(mcClass);
             setScreenMethod = findSetScreenMethod(mcClass, screenField);
 
-            sessionClass = findSessionClass();
-            sessionField = sessionClass == null ? null : findFieldOfType(mcClass, sessionClass);
-            if (sessionField == null) sessionField = findNamedSessionField(mcClass);
+            sessionField = findNamedSessionField(mcClass);
+            if (sessionField == null) {
+                sessionClass = findSessionClass();
+                if (sessionClass != null) {
+                    sessionField = findFieldOfType(mcClass, sessionClass);
+                }
+            }
             if (sessionField == null) sessionField = discoverSessionField(mcClass, minecraftInstance);
             if (sessionField == null) return "validated session/user field not found on Minecraft";
 
             sessionField.setAccessible(true);
+            try {
+                Field modifiersField = Field.class.getDeclaredField("modifiers");
+                modifiersField.setAccessible(true);
+                modifiersField.setInt(sessionField, sessionField.getModifiers() & ~Modifier.FINAL);
+            } catch (Throwable ignored) {}
             sessionClass = sessionField.getType();
             if (!looksLikeSessionClass(sessionClass)) {
                 return "session/user field failed structural validation";
@@ -282,10 +291,16 @@ public final class SessionSwitcher {
         };
         try {
             scheduleMethod.invoke(minecraftInstance, wrapped);
-            return done.await(5, TimeUnit.SECONDS);
-        } catch (Throwable t) {
-            return false;
+            if (done.await(4, TimeUnit.SECONDS)) return true;
+        } catch (Throwable ignored) {}
+
+        // Fallback: If scheduling timed out or failed while outside of a world
+        // (e.g. game is at the main menu, paused, or scheduler quiescent), perform direct mutation.
+        if (!isInWorld()) {
+            action.run();
+            return true;
         }
+        return false;
     }
 
     private static Object createSession(String name, String uuidText, String token) throws Exception {
@@ -411,6 +426,7 @@ public final class SessionSwitcher {
                 "net.minecraft.client.session.Session",
                 "net.minecraft.util.Session",
                 "net.minecraft.class_320",
+                "avm",
                 "bhl",
                 "bhm"
         };
@@ -434,7 +450,7 @@ public final class SessionSwitcher {
     }
 
     private static Field findNamedSessionField(Class<?> owner) {
-        for (String name : new String[]{"user", "session", "field_1726", "field_1690"}) {
+        for (String name : new String[]{"user", "session", "field_71449_j", "ae", "field_1726", "field_1690"}) {
             Field field = findField(owner, name);
             if (field != null && !Modifier.isStatic(field.getModifiers())
                     && looksLikeSessionClass(field.getType())) {
@@ -479,10 +495,10 @@ public final class SessionSwitcher {
         if (!constructor) return false;
 
         Method name = findValueMethod(type,
-                new String[]{"getUsername", "getName", "method_1676", "c"},
+                new String[]{"getUsername", "getName", "func_111285_a", "method_1676", "c"},
                 new String[]{"user", "name"});
         Method token = findValueMethod(type,
-                new String[]{"getToken", "getAccessToken", "method_1674", "d"},
+                new String[]{"getToken", "getAccessToken", "func_148254_d", "method_1674", "d"},
                 new String[]{"token"});
         return name != null && token != null;
     }
@@ -548,8 +564,8 @@ public final class SessionSwitcher {
 
     private static Field findWorldStateField(Class<?> owner, boolean player) {
         String[] names = player
-                ? new String[]{"thePlayer", "player", "field_71439_g", "field_1724"}
-                : new String[]{"theWorld", "world", "level", "field_71441_e", "field_1687"};
+                ? new String[]{"thePlayer", "player", "field_71439_g", "h", "field_1724"}
+                : new String[]{"theWorld", "world", "level", "field_71441_e", "f", "field_1687"};
         for (String name : names) {
             Field field = findField(owner, name);
             if (field != null && !Modifier.isStatic(field.getModifiers())) {
@@ -559,8 +575,8 @@ public final class SessionSwitcher {
         }
 
         String[] typeHints = player
-                ? new String[]{"EntityPlayerSP", "LocalPlayer", "ClientPlayer", "class_746"}
-                : new String[]{"WorldClient", "ClientLevel", "ClientWorld", "class_638"};
+                ? new String[]{"EntityPlayerSP", "LocalPlayer", "ClientPlayer", "class_746", "bew"}
+                : new String[]{"WorldClient", "ClientLevel", "ClientWorld", "class_638", "bdb"};
         for (Class<?> current = owner; current != null && current != Object.class;
              current = current.getSuperclass()) {
             for (Field field : current.getDeclaredFields()) {
@@ -587,7 +603,7 @@ public final class SessionSwitcher {
     }
 
     private static Method findMinecraftGetter(Class<?> mcClass) {
-        for (String name : new String[]{"getMinecraft", "getInstance", "func_71410_x", "method_1551"}) {
+        for (String name : new String[]{"getMinecraft", "getInstance", "func_71410_x", "method_1551", "A"}) {
             Method method = findNoArgMethod(mcClass, name);
             if (method != null && Modifier.isStatic(method.getModifiers())
                     && mcClass.isAssignableFrom(method.getReturnType())) return method;
@@ -601,7 +617,7 @@ public final class SessionSwitcher {
     }
 
     private static Method findScheduleMethod(Class<?> mcClass) {
-        for (String name : new String[]{"execute", "addScheduledTask", "func_152344_a", "method_18859"}) {
+        for (String name : new String[]{"execute", "addScheduledTask", "func_152344_a", "method_18859", "a"}) {
             for (Class<?> current = mcClass; current != null && current != Object.class;
                  current = current.getSuperclass()) {
                 try {
@@ -641,8 +657,7 @@ public final class SessionSwitcher {
                 "net.minecraft.class_412",
                 "net.minecraft.client.multiplayer.GuiConnecting",
                 "net.minecraft.client.gui.GuiConnecting",
-                "awz",
-                "axk"
+                "awz"
         };
         for (int i = 0; i < names.length; i++) {
             Class<?> type = tryLoad(names[i]);
@@ -877,7 +892,7 @@ public final class SessionSwitcher {
     }
 
     private static Field findScreenField(Class<?> owner) {
-        String[] names = {"currentScreen", "screen", "field_71462_r", "field_1752"};
+        String[] names = {"currentScreen", "screen", "field_71462_r", "m", "field_1752"};
         for (int i = 0; i < names.length; i++) {
             Field field = findField(owner, names[i]);
             if (field != null && !Modifier.isStatic(field.getModifiers())
@@ -913,7 +928,7 @@ public final class SessionSwitcher {
 
     private static Method findSetScreenMethod(Class<?> mcClass, Field screen) {
         Class<?> screenType = screen == null ? null : screen.getType();
-        String[] names = {"setScreen", "displayGuiScreen", "openScreen", "method_1507"};
+        String[] names = {"setScreen", "displayGuiScreen", "func_147108_a", "openScreen", "method_1507", "a"};
         for (int i = 0; i < names.length; i++) {
             Method method = findOneArgMethod(mcClass, names[i], screenType);
             if (method != null) return method;
