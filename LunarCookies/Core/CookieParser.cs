@@ -24,14 +24,16 @@ public sealed class CookieEntry
 
 public sealed class ParsedCookies
 {
-    public ParsedCookies(IReadOnlyDictionary<string, CookieEntry> cookies, string? refreshToken = null)
+    public ParsedCookies(IReadOnlyDictionary<string, CookieEntry> cookies, string? refreshToken = null, string? accessToken = null)
     {
         Cookies = cookies;
         RefreshToken = refreshToken ?? string.Empty;
+        AccessToken = accessToken ?? string.Empty;
     }
 
     public IReadOnlyDictionary<string, CookieEntry> Cookies { get; }
     public string RefreshToken { get; }
+    public string AccessToken { get; }
 
     public string ToSisuCookieHeader()
     {
@@ -104,11 +106,13 @@ public static class CookieParser
             return FromCookieHeader(trimmed);
         if (LooksLikeLocalts(trimmed))
             return FromLocalts(trimmed);
+        if (TryExtractMcaToken(trimmed, out string? mca) && !string.IsNullOrWhiteSpace(mca))
+            return FromMca(mca);
         if (trimmed.Contains('\t'))
             return FromNetscape(trimmed);
 
         throw new CookieAuthException(
-            "Unrecognized cookie format. Use a Netscape cookie file, semicolon-separated cookie header, or Localts token file.");
+            "Unrecognized cookie format. Use a Netscape cookie file, semicolon-separated cookie header, Localts token file, or Minecraft access-token (eyJ...) file.");
     }
 
     private static string NormalizePath(string path)
@@ -306,6 +310,110 @@ public static class CookieParser
 
     private static bool LooksLikeLocaltsRefreshToken(string value) =>
         value.StartsWith(MsaTokenPrefix, StringComparison.Ordinal);
+
+    private static ParsedCookies FromMca(string token) =>
+        new(new Dictionary<string, CookieEntry>(), null, token.Trim().Trim('"', '\''));
+
+    private static bool TryExtractMcaToken(string text, out string? token)
+    {
+        token = null;
+        if (string.IsNullOrWhiteSpace(text) || text.Contains('\t'))
+            return false;
+
+        // Find JWT-shaped candidates (header starts with eyJ). This also handles
+        // JSON wrappers like {"mcToken":"eyJ..."} or a "Bearer eyJ..." prefix.
+        var matches = System.Text.RegularExpressions.Regex.Matches(
+            text, @"eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+");
+        foreach (System.Text.RegularExpressions.Match m in matches)
+        {
+            string candidate = m.Value.Trim().Trim('"', '\'');
+            if (IsMinecraftAccessToken(candidate))
+            {
+                token = candidate;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool IsMinecraftAccessToken(string jwt)
+    {
+        string[] parts = jwt.Split('.');
+        if (parts.Length != 3)
+            return false;
+
+        System.Text.Json.JsonElement header;
+        System.Text.Json.JsonElement payload;
+        try
+        {
+            using var hdoc = System.Text.Json.JsonDocument.Parse(DecodeBase64Url(parts[0]));
+            header = hdoc.RootElement.Clone();
+            using var doc = System.Text.Json.JsonDocument.Parse(DecodeBase64Url(parts[1]));
+            payload = doc.RootElement.Clone();
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (!header.TryGetProperty("alg", out _))
+            return false;
+
+        // MCA (login_with_xbox) tokens embed the Minecraft profile plus Xbox ids:
+        // profiles.mc uuid and pfd[type=mc].name/id, with xuid/xid and the
+        // Minecraft client id (aid ...402b5328) / iss=authentication / auth=XBOX.
+        bool hasMcProfile = false;
+        if (payload.TryGetProperty("profiles", out var profiles)
+            && profiles.ValueKind == System.Text.Json.JsonValueKind.Object
+            && profiles.TryGetProperty("mc", out var mc)
+            && mc.ValueKind == System.Text.Json.JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(mc.GetString()))
+        {
+            hasMcProfile = true;
+        }
+        else if (payload.TryGetProperty("pfd", out var pfd)
+            && pfd.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            foreach (var entry in pfd.EnumerateArray())
+            {
+                if (entry.ValueKind != System.Text.Json.JsonValueKind.Object)
+                    continue;
+                bool isMc = entry.TryGetProperty("type", out var t)
+                    && string.Equals(t.GetString(), "mc", StringComparison.OrdinalIgnoreCase);
+                bool hasId = entry.TryGetProperty("id", out var id)
+                    && !string.IsNullOrWhiteSpace(id.GetString());
+                bool hasName = entry.TryGetProperty("name", out var name)
+                    && !string.IsNullOrWhiteSpace(name.GetString());
+                if (isMc && hasId && hasName)
+                {
+                    hasMcProfile = true;
+                    break;
+                }
+            }
+        }
+        if (!hasMcProfile)
+            return false;
+
+        bool hasXuid = (payload.TryGetProperty("xuid", out var xuid)
+                && !string.IsNullOrWhiteSpace(xuid.GetString()))
+            || (payload.TryGetProperty("xid", out var xid)
+                && !string.IsNullOrWhiteSpace(xid.GetString()));
+        if (!hasXuid)
+            return false;
+
+        return true;
+    }
+
+    private static string DecodeBase64Url(string value)
+    {
+        string padded = value.Replace('-', '+').Replace('_', '/');
+        switch (padded.Length % 4)
+        {
+            case 2: padded += "=="; break;
+            case 3: padded += "="; break;
+        }
+        return System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(padded));
+    }
 
     private static ParsedCookies FromNetscape(string text)
     {

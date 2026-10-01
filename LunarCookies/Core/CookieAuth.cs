@@ -53,6 +53,9 @@ public static class CookieAuth
         if (!string.IsNullOrWhiteSpace(cookies.RefreshToken))
             return ProfileFromRefreshTokenAsync(cookies.RefreshToken.Trim(), ct);
 
+        if (!string.IsNullOrWhiteSpace(cookies.AccessToken))
+            return ProfileFromAccessTokenAsync(cookies.AccessToken.Trim(), ct);
+
         return CookiesToProfileAsync(cookies, ct);
     }
 
@@ -63,8 +66,11 @@ public static class CookieAuth
         return new MinecraftProfile(profile.Name, profile.Uuid, profile.Token, tokens.Refresh);
     }
 
-    public static Task<MinecraftProfile> ProfileFromAccessTokenAsync(string token, CancellationToken ct = default) =>
-        ProfileFromMcaAsync(token, ct);
+    public static Task<MinecraftProfile> ProfileFromAccessTokenAsync(string token, CancellationToken ct = default)
+    {
+        ThrowIfMcaExpired(token.Trim());
+        return ProfileFromMcaAsync(token.Trim(), ct);
+    }
 
     private static async Task<MinecraftProfile> CookiesToProfileAsync(ParsedCookies cookies, CancellationToken ct)
     {
@@ -223,6 +229,35 @@ public static class CookieAuth
 
     private static string PadBase64(string value) =>
         value.PadRight(value.Length + ((4 - value.Length % 4) % 4), '=');
+
+    private static void ThrowIfMcaExpired(string token)
+    {
+        try
+        {
+            string[] parts = token.Split('.');
+            if (parts.Length != 3)
+                return;
+            byte[] bytes = Convert.FromBase64String(PadBase64(parts[1].Replace('-', '+').Replace('_', '/')));
+            using var doc = JsonDocument.Parse(bytes);
+            if (!doc.RootElement.TryGetProperty("exp", out var exp))
+                return;
+            long seconds = exp.ValueKind == JsonValueKind.Number
+                ? exp.GetInt64()
+                : long.Parse(exp.GetString() ?? "");
+            var expiry = DateTimeOffset.FromUnixTimeSeconds(seconds);
+            if (DateTimeOffset.UtcNow > expiry.AddMinutes(1))
+                throw new CookieAuthException(
+                    $"Minecraft access token expired on {expiry:yyyy-MM-dd HH:mm} UTC. Re-export a fresh token file — access tokens last ~24h and cannot be refreshed.");
+        }
+        catch (CookieAuthException)
+        {
+            throw;
+        }
+        catch
+        {
+            // If expiry can't be read, let the profile lookup decide.
+        }
+    }
 
     private static string? ExtractSisuAccessToken(string url)
     {

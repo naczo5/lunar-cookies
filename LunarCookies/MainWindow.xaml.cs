@@ -566,7 +566,7 @@ public sealed partial class MainWindow : Window
             TextWrapping = TextWrapping.Wrap,
             MinHeight = 160,
             MaxHeight = 300,
-            PlaceholderText = "Paste a Localts token, Netscape cookies, or a cookie header…",
+            PlaceholderText = "Paste a Localts token, Netscape cookies, a cookie header, or a Minecraft access-token…",
             Text = initialText
         };
 
@@ -678,7 +678,9 @@ public sealed partial class MainWindow : Window
             return new ImportResult(false, ex.Message);
         }
 
-        string source = string.IsNullOrWhiteSpace(parsed.RefreshToken) ? "cookie" : "localts";
+        string source = !string.IsNullOrWhiteSpace(parsed.RefreshToken) ? "localts"
+            : !string.IsNullOrWhiteSpace(parsed.AccessToken) ? "token"
+            : "cookie";
         Log($"{label}: parsed {source} data; authenticating.");
 
         try

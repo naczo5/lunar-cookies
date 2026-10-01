@@ -53,6 +53,27 @@ var tests = new (string Name, Action Run)[]
         AssertThrows<CookieAuthException>(() =>
             CookieParser.FromText("not a supported account format"));
     }),
+    ("Minecraft access token (bare MCA JWT)", () =>
+    {
+        string jwt = FakeMcaJwt("2533274909086470", "c812a564-a9da-437f-a33c-a32760e3156f", "Sv2Void7vh");
+        ParsedCookies parsed = CookieParser.FromText(jwt);
+        Assert(string.IsNullOrWhiteSpace(parsed.RefreshToken));
+        Assert(parsed.Cookies.Count == 0);
+        Assert(parsed.AccessToken == jwt);
+    }),
+    ("Minecraft access token with Bearer prefix and JSON wrapper", () =>
+    {
+        string jwt = FakeMcaJwt("2533274909086470", "c812a564-a9da-437f-a33c-a32760e3156f", "Sv2Void7vh");
+        ParsedCookies bearer = CookieParser.FromText("Bearer " + jwt);
+        Assert(bearer.AccessToken == jwt);
+        ParsedCookies json = CookieParser.FromText("{\"mcToken\":\"" + jwt + "\"}");
+        Assert(json.AccessToken == jwt);
+    }),
+    ("Reject JWT without Minecraft profile", () =>
+    {
+        string jwt = FakeJwt(("xuid", "2535443995591896"), ("exp", "1786969129"));
+        AssertThrows<CookieAuthException>(() => CookieParser.FromText(jwt));
+    }),
     ("Server address host only", () =>
     {
         Assert(MinecraftServerAddress.TryParse("play.hypixel.net", out MinecraftServerAddress parsed));
@@ -205,6 +226,20 @@ static string FakeJwt(params (string Name, string Value)[] claims)
     }
     payload.Append('}');
     return "eyJhbGciOiJub25lIn0." + Base64Url(payload.ToString()) + ".sig";
+}
+
+static string FakeMcaJwt(string xuid, string uuid, string name)
+{
+    string header = Base64Url("{\"kid\":\"049181\",\"alg\":\"RS256\"}");
+    string payload = Base64Url(
+        "{\"xuid\":\"" + xuid + "\",\"agg\":\"Adult\",\"sub\":\"da307ebc-556f-4b3a-b1ca-864ffdede4b6\"," +
+        "\"auth\":\"XBOX\",\"ns\":\"default\",\"roles\":[],\"iss\":\"authentication\"," +
+        "\"flags\":[\"multiplayer\"],\"profiles\":{\"mc\":\"" + uuid + "\"}," +
+        "\"platform\":\"PC_LAUNCHER\",\"tid\":\"E99B0\"," +
+        "\"pfd\":[{\"type\":\"mc\",\"id\":\"" + uuid + "\",\"name\":\"" + name + "\"}]," +
+        "\"xid\":\"" + xuid + "\",\"nbf\":1790831105,\"exp\":1790917505,\"iat\":1790831105," +
+        "\"aid\":\"00000000-0000-0000-0000-0000402b5328\"}");
+    return "eyJ" + header.Substring(3) + "." + payload + ".sig";
 }
 
 static string Base64Url(string value)

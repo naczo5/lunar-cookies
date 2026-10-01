@@ -81,7 +81,7 @@ internal static class SmokeTests
                 try
                 {
                     ParsedCookies parsed = CookieParser.FromPath(path);
-                    Expect(parsed.Cookies.Count > 0 || !string.IsNullOrWhiteSpace(parsed.RefreshToken),
+                    Expect(parsed.Cookies.Count > 0 || !string.IsNullOrWhiteSpace(parsed.RefreshToken) || !string.IsNullOrWhiteSpace(parsed.AccessToken),
                         $"Private cookie sample #{sample} parses");
                     if (parsed.Cookies.Count > 0)
                     {

@@ -11,7 +11,7 @@ public sealed class StoredAccount
     public string Uuid { get; set; } = "";
     public string AccessToken { get; set; } = "";
     public string RefreshToken { get; set; } = "";
-    public string Source { get; set; } = "unknown"; // localts | cookie | offline
+    public string Source { get; set; } = "unknown"; // localts | cookie | token | offline
     public DateTimeOffset AddedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? LastUsedAt { get; set; }
 
@@ -24,6 +24,7 @@ public sealed class StoredAccount
     [JsonIgnore]
     public string DisplayLabel => IsOffline ? $"{Name}  (cracked)"
         : HasRefresh ? $"{Name}  (Localts)"
+        : string.Equals(Source, "token", StringComparison.OrdinalIgnoreCase) ? $"{Name}  (token)"
         : $"{Name}  (cookie)";
 }
 
@@ -95,7 +96,11 @@ public sealed class AccountStore
         existing.AccessToken = profile.Token;
         if (!string.IsNullOrWhiteSpace(profile.RefreshToken))
             existing.RefreshToken = profile.RefreshToken;
-        existing.Source = source;
+        // Don't downgrade a refresh-backed (Localts) entry to a refresh-less
+        // token/cookie source when re-importing the same account via MCA.
+        bool incomingHasRefresh = !string.IsNullOrWhiteSpace(profile.RefreshToken);
+        if (incomingHasRefresh || !existing.HasRefresh)
+            existing.Source = source;
         Save();
         return existing;
     }
