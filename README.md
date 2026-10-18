@@ -4,6 +4,8 @@
 ![Downloads](https://img.shields.io/github/downloads/naczo5/lunar-cookies/total?style=flat-square&label=downloads)
 ![License](https://img.shields.io/github/license/naczo5/lunar-cookies?style=flat-square&label=license)
 
+English | [简体中文](README.zh-CN.md)
+
 A portable WinUI 3 account switcher for multiple Minecraft Java clients. It
 supports Localts refresh tokens (`M.C…`) and Netscape or cookie-header
 Microsoft session cookies.
