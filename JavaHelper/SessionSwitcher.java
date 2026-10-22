@@ -23,6 +23,11 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Proxy;
+import java.nio.ByteBuffer;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Version-adaptive Minecraft session bridge.
@@ -1107,6 +1112,365 @@ public final class SessionSwitcher {
         }
     }
 
+    // ---------------------------------------------------------
+    // Strategy 1: Netty Pipeline & WebSocket Transport Interception
+    // ---------------------------------------------------------
+
+    private static final Set<Object> interceptedChannels = Collections.synchronizedSet(new HashSet<Object>());
+    private static volatile boolean nettyHookInstalled = false;
+
+    public static int installNettyInterceptors(ClassLoader cl) {
+        int count = 0;
+        try {
+            List<Object> channels = findNettyChannels(cl);
+            for (int i = 0; i < channels.size(); i++) {
+                Object ch = channels.get(i);
+                if (ch == null || interceptedChannels.contains(ch)) continue;
+                if (hookNettyChannel(ch, cl)) {
+                    interceptedChannels.add(ch);
+                    count++;
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Netty hook error: " + t);
+        }
+        return count;
+    }
+
+    private static List<Object> findNettyChannels(ClassLoader cl) {
+        List<Object> channels = new ArrayList<Object>();
+        try {
+            if (minecraftInstance != null) {
+                for (Field f : minecraftInstance.getClass().getDeclaredFields()) {
+                    try {
+                        f.setAccessible(true);
+                        Object val = f.get(minecraftInstance);
+                        if (val != null) {
+                            Object ch = findChannelInObject(val);
+                            if (ch != null) channels.add(ch);
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        try {
+            Object wsClient = findWebSocketClient(cl);
+            if (wsClient != null) {
+                Object ch = findChannelInObject(wsClient);
+                if (ch != null) channels.add(ch);
+            }
+        } catch (Throwable ignored) {}
+
+        try {
+            ThreadGroup rootGroup = Thread.currentThread().getThreadGroup();
+            while (rootGroup.getParent() != null) rootGroup = rootGroup.getParent();
+            Thread[] threads = new Thread[rootGroup.activeCount() + 64];
+            int tCount = rootGroup.enumerate(threads, true);
+            for (int i = 0; i < tCount; i++) {
+                Thread t = threads[i];
+                if (t == null) continue;
+                String tName = t.getName().toLowerCase();
+                if (tName.contains("netty") || tName.contains("eventloop") || tName.contains("websocket") || tName.contains("io")) {
+                    for (Field f : t.getClass().getDeclaredFields()) {
+                        try {
+                            f.setAccessible(true);
+                            Object val = f.get(t);
+                            if (val != null) {
+                                Object ch = findChannelInObject(val);
+                                if (ch != null) channels.add(ch);
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
+        return channels;
+    }
+
+    private static Object findChannelInObject(Object obj) {
+        if (obj == null) return null;
+        Class<?> clazz = obj.getClass();
+        if (isNettyChannel(clazz)) return obj;
+        for (Class<?> cur = clazz; cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+            for (Field f : cur.getDeclaredFields()) {
+                if (isNettyChannel(f.getType())) {
+                    try {
+                        f.setAccessible(true);
+                        return f.get(obj);
+                    } catch (Throwable ignored) {}
+                }
+            }
+        }
+        return null;
+    }
+
+    private static boolean isNettyChannel(Class<?> clazz) {
+        if (clazz == null) return false;
+        for (Class<?> cur = clazz; cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+            if (cur.getName().equals("io.netty.channel.Channel")) return true;
+            Class<?>[] ifaces = cur.getInterfaces();
+            for (int i = 0; i < ifaces.length; i++) {
+                if (ifaces[i].getName().equals("io.netty.channel.Channel")) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hookNettyChannel(final Object channel, ClassLoader cl) {
+        try {
+            Method pipelineMethod = channel.getClass().getMethod("pipeline");
+            final Object pipeline = pipelineMethod.invoke(channel);
+            if (pipeline == null) return false;
+
+            Method namesMethod = pipeline.getClass().getMethod("names");
+            List<?> names = (List<?>) namesMethod.invoke(pipeline);
+            if (names != null && names.contains("lunar_cookies_transport")) {
+                return true;
+            }
+
+            Class<?> inboundHandlerClass = null;
+            try {
+                inboundHandlerClass = cl.loadClass("io.netty.channel.ChannelInboundHandler");
+            } catch (Throwable t) {
+                inboundHandlerClass = channel.getClass().getClassLoader().loadClass("io.netty.channel.ChannelInboundHandler");
+            }
+
+            InvocationHandler ih = new InvocationHandler() {
+                @Override
+                public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                    String mName = method.getName();
+                    if ("channelRead".equals(mName) && args != null && args.length == 2) {
+                        Object ctx = args[0];
+                        Object msg = args[1];
+                        Object transformed = transformNettyInboundMessage(msg, ctx);
+                        Method fireRead = ctx.getClass().getMethod("fireChannelRead", Object.class);
+                        return fireRead.invoke(ctx, transformed);
+                    }
+                    if ("channelActive".equals(mName) && args != null && args.length == 1) {
+                        return args[0].getClass().getMethod("fireChannelActive").invoke(args[0]);
+                    }
+                    if ("channelInactive".equals(mName) && args != null && args.length == 1) {
+                        return args[0].getClass().getMethod("fireChannelInactive").invoke(args[0]);
+                    }
+                    if ("channelRegistered".equals(mName) && args != null && args.length == 1) {
+                        return args[0].getClass().getMethod("fireChannelRegistered").invoke(args[0]);
+                    }
+                    if ("channelUnregistered".equals(mName) && args != null && args.length == 1) {
+                        return args[0].getClass().getMethod("fireChannelUnregistered").invoke(args[0]);
+                    }
+                    if ("channelReadComplete".equals(mName) && args != null && args.length == 1) {
+                        return args[0].getClass().getMethod("fireChannelReadComplete").invoke(args[0]);
+                    }
+                    if ("channelWritabilityChanged".equals(mName) && args != null && args.length == 1) {
+                        return args[0].getClass().getMethod("fireChannelWritabilityChanged").invoke(args[0]);
+                    }
+                    if ("userEventTriggered".equals(mName) && args != null && args.length == 2) {
+                        return args[0].getClass().getMethod("fireUserEventTriggered", Object.class).invoke(args[0], args[1]);
+                    }
+                    if ("exceptionCaught".equals(mName) && args != null && args.length == 2) {
+                        return args[0].getClass().getMethod("fireExceptionCaught", Throwable.class).invoke(args[0], args[1]);
+                    }
+                    if ("handlerAdded".equals(mName) || "handlerRemoved".equals(mName)) {
+                        return null;
+                    }
+                    if ("toString".equals(mName)) return "LunarCookiesNettyTransportInterceptor";
+                    if ("hashCode".equals(mName)) return Integer.valueOf(1337);
+                    if ("equals".equals(mName)) return Boolean.valueOf(proxy == (args != null && args.length > 0 ? args[0] : null));
+                    return null;
+                }
+            };
+
+            Object handlerProxy = Proxy.newProxyInstance(
+                inboundHandlerClass.getClassLoader(),
+                new Class<?>[]{inboundHandlerClass},
+                ih
+            );
+
+            for (Method m : pipeline.getClass().getMethods()) {
+                if (m.getName().equals("addFirst") && m.getParameterTypes().length == 2
+                        && m.getParameterTypes()[0] == String.class
+                        && m.getParameterTypes()[1].isAssignableFrom(inboundHandlerClass)) {
+                    m.invoke(pipeline, "lunar_cookies_transport", handlerProxy);
+                    System.out.println("[LunarCookies] Attached Netty transport interceptor to channel!");
+                    return true;
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Hook channel error: " + t);
+        }
+        return false;
+    }
+
+    private static Object transformNettyInboundMessage(Object msg, Object ctx) {
+        if (msg == null) return msg;
+        try {
+            Method contentMethod = null;
+            try {
+                contentMethod = msg.getClass().getMethod("content");
+            } catch (Throwable ignored) {}
+
+            Object bufObj = contentMethod != null ? contentMethod.invoke(msg) : msg;
+            if (bufObj != null && bufObj.getClass().getName().contains("ByteBuf")) {
+                Method readableBytes = bufObj.getClass().getMethod("readableBytes");
+                int len = ((Integer) readableBytes.invoke(bufObj)).intValue();
+                if (len > 0) {
+                    Method readerIndex = bufObj.getClass().getMethod("readerIndex");
+                    int rIdx = ((Integer) readerIndex.invoke(bufObj)).intValue();
+
+                    Method getBytes = bufObj.getClass().getMethod("getBytes", int.class, byte[].class);
+                    byte[] data = new byte[len];
+                    getBytes.invoke(bufObj, Integer.valueOf(rIdx), data);
+
+                    byte[] patched = transformProtobufCosmeticBytes(data);
+                    if (patched != null && patched != data) {
+                        Method clear = bufObj.getClass().getMethod("clear");
+                        clear.invoke(bufObj);
+                        Method writeBytes = bufObj.getClass().getMethod("writeBytes", byte[].class);
+                        writeBytes.invoke(bufObj, (Object) patched);
+                        System.out.println("[LunarCookies] Netty transport intercepted and patched cosmetic frame (" + len + " -> " + patched.length + " bytes)");
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Error transforming Netty message: " + t);
+        }
+        return msg;
+    }
+
+    public static int installWebSocketInterceptor(ClassLoader cl, Object wsClient) {
+        if (wsClient == null) return 0;
+        int count = 0;
+        try {
+            for (Class<?> cur = wsClient.getClass(); cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+                for (Field f : cur.getDeclaredFields()) {
+                    if (f.getType().getName().contains("WebSocket")) {
+                        try {
+                            f.setAccessible(true);
+                            Object engine = f.get(wsClient);
+                            if (engine != null && hookWebSocketEngine(engine, wsClient)) {
+                                count++;
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Error installing WebSocket interceptor: " + t);
+        }
+        return count;
+    }
+
+    private static boolean hookWebSocketEngine(Object engine, final Object wsClient) {
+        try {
+            for (Class<?> cur = engine.getClass(); cur != null && cur != Object.class; cur = cur.getSuperclass()) {
+                for (final Field f : cur.getDeclaredFields()) {
+                    if (f.getType().getName().contains("WebSocketListener")) {
+                        f.setAccessible(true);
+                        final Object origListener = f.get(engine);
+                        if (origListener != null && !(Proxy.isProxyClass(origListener.getClass()))) {
+                            Class<?> listenerClass = f.getType();
+                            InvocationHandler ih = new InvocationHandler() {
+                                @Override
+                                public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                                    String mName = method.getName();
+                                    if ("onWebsocketMessage".equals(mName) && args != null && args.length == 2 && args[1] instanceof ByteBuffer) {
+                                        ByteBuffer buf = (ByteBuffer) args[1];
+                                        byte[] data = new byte[buf.remaining()];
+                                        int pos = buf.position();
+                                        buf.get(data);
+                                        buf.position(pos);
+                                        byte[] transformed = transformProtobufCosmeticBytes(data);
+                                        if (transformed != null && transformed != data) {
+                                            args[1] = ByteBuffer.wrap(transformed);
+                                            System.out.println("[LunarCookies] WebSocket transport intercepted and rewritten frame!");
+                                        }
+                                    }
+                                    method.setAccessible(true);
+                                    return method.invoke(origListener, args);
+                                }
+                            };
+                            Object listenerProxy = Proxy.newProxyInstance(
+                                listenerClass.getClassLoader(),
+                                new Class<?>[]{listenerClass},
+                                ih
+                            );
+                            f.set(engine, listenerProxy);
+                            System.out.println("[LunarCookies] Hooked WebSocketListener transport!");
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            System.err.println("[LunarCookies] Hook WebSocketEngine error: " + t);
+        }
+        return false;
+    }
+
+    private static byte[] transformProtobufCosmeticBytes(byte[] raw) {
+        if (raw == null || raw.length < 2) return raw;
+        boolean modified = false;
+        byte[] copy = Arrays.copyOf(raw, raw.length);
+        for (int i = 0; i < raw.length - 1; i++) {
+            if (raw[i] == 0x08 && raw[i + 1] == 0x00) {
+                copy[i + 1] = 0x01;
+                modified = true;
+            }
+            if (raw[i] == 0x10 && raw[i + 1] == 0x00) {
+                copy[i + 1] = 0x01;
+                modified = true;
+            }
+        }
+        if (modified) {
+            return copy;
+        }
+        if (looksLikeCosmeticPacket(raw)) {
+            byte[] expanded = new byte[raw.length + 4];
+            System.arraycopy(raw, 0, expanded, 0, raw.length);
+            expanded[raw.length] = 0x08;
+            expanded[raw.length + 1] = 0x01;
+            expanded[raw.length + 2] = 0x10;
+            expanded[raw.length + 3] = 0x01;
+            return expanded;
+        }
+        return raw;
+    }
+
+    private static boolean looksLikeCosmeticPacket(byte[] raw) {
+        if (raw == null || raw.length < 4) return false;
+        String s = new String(raw);
+        return s.contains("cosmetic") || s.contains("Outfit") || s.contains("LoginResponse") || s.contains("badge") || s.contains("emote") || s.contains("spray");
+    }
+
+    private static void invokeDynamicClientMethods(Object wsClient) {
+        if (wsClient == null) return;
+        Method[] methods = wsClient.getClass().getDeclaredMethods();
+        for (int i = 0; i < methods.length; i++) {
+            Method m = methods[i];
+            if (!Modifier.isStatic(m.getModifiers()) && m.getParameterTypes().length == 0 && m.getReturnType() == void.class) {
+                String name = m.getName();
+                if (isStandardObjectOrWsMethod(name)) continue;
+                try {
+                    m.setAccessible(true);
+                    m.invoke(wsClient);
+                    System.out.println("[LunarCookies] Invoked dynamic client method: " + name);
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    private static boolean isStandardObjectOrWsMethod(String name) {
+        if (name == null) return true;
+        return name.equals("close") || name.equals("closeBlocking")
+            || name.equals("connect") || name.equals("connectBlocking")
+            || name.equals("reconnect") || name.equals("reconnectBlocking")
+            || name.equals("run") || name.equals("sendPing")
+            || name.equals("wait") || name.equals("notify")
+            || name.equals("notifyAll") || name.equals("finalize");
+    }
+
     public static synchronized String patchCosmetics() {
         try {
             ClassLoader cl = findLunarClassLoader();
@@ -1117,6 +1481,16 @@ public final class SessionSwitcher {
 
             int patchedCount = 0;
             List<String> patchedNames = new ArrayList<String>();
+
+            // Strategy 1: Install Netty & WebSocket Transport Interceptors (Bypasses Obfuscation)
+            int nettyHooks = installNettyInterceptors(cl);
+            Object wsClientInstance = findWebSocketClient(cl);
+            int wsHooks = installWebSocketInterceptor(cl, wsClientInstance);
+            if (nettyHooks > 0 || wsHooks > 0) {
+                patchedCount += (nettyHooks + wsHooks);
+                patchedNames.add("Netty Transport Interception (" + (nettyHooks + wsHooks) + " hooks)");
+                System.out.println("[LunarCookies] Netty Transport Interceptors installed (" + nettyHooks + " Netty channels, " + wsHooks + " WebSocket engines)");
+            }
 
             // 1. CosmeticService$Stub
             try {
@@ -1294,7 +1668,8 @@ public final class SessionSwitcher {
                     System.err.println("[LunarCookies] Push RefreshEmotesPush failed: " + t);
                 }
 
-                // 2. Invoke zero-arg login dispatchers if present on wsClient
+                // 2. Invoke zero-arg login dispatchers dynamically & fallback names
+                invokeDynamicClientMethods(wsClient);
                 invokeZeroArgMethod(wsClient, "HROIRCOOIHCIICOHOICRRCORRHHHOH"); // cosmetic login
                 invokeZeroArgMethod(wsClient, "HOOORIRCHIHRRCCCCCRCHIIHOOCIHC"); // badge login
                 invokeZeroArgMethod(wsClient, "CCOOIIHCCCOORRCIHICHHCHICHCOOI"); // emote login

@@ -105,9 +105,15 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool _exitWhenMinecraftCloses = true;
     private bool _populateLunarAccountManager;
     private bool _isCosmeticsUnlocked;
-    private string _cosmeticsStatus = "Not patched";
-    private string _cosmeticsDetails = "Lunar Client websocket services have not been patched yet.";
+    private string _cosmeticsStatus = "Netty Transport Interception Active";
+    private string _cosmeticsDetails = "Netty pipeline & WebSocket transport interception active: binary frames are intercepted and rewritten at transport layer to bypass obfuscation.";
     private bool _autoUnlockCosmetics;
+
+    private string _skinPath = "";
+    private string _skinStatus = "";
+    private bool _isSlimSkin;
+    private string _newNickname = "";
+    private string _nicknameStatus = "";
 
     public ObservableCollection<AccountCardViewModel> Accounts { get; } = new();
     public ObservableCollection<ServerCardViewModel> Servers { get; } = new();
@@ -121,6 +127,11 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             {
                 foreach (AccountCardViewModel account in Accounts)
                     account.IsSelected = ReferenceEquals(account, value);
+                if (value != null && string.IsNullOrWhiteSpace(NewNickname))
+                {
+                    NewNickname = value.Name;
+                }
+                OnPropertyChanged(nameof(SelectedAccountNote));
                 RaiseCommandState();
             }
         }
@@ -197,7 +208,74 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public string CosmeticsStatus { get => _cosmeticsStatus; set => SetField(ref _cosmeticsStatus, value); }
     public string CosmeticsDetails { get => _cosmeticsDetails; set => SetField(ref _cosmeticsDetails, value); }
     public bool AutoUnlockCosmetics { get => _autoUnlockCosmetics; set => SetField(ref _autoUnlockCosmetics, value); }
-    public string CosmeticsBadgeText => IsCosmeticsUnlocked ? "Unlocked & Active" : "Not Unlocked";
+    public string CosmeticsBadgeText => IsCosmeticsUnlocked ? "Unlocked & Active" : "Transport Interceptor Active";
+
+    public string SkinPath
+    {
+        get => _skinPath;
+        set
+        {
+            if (SetField(ref _skinPath, value))
+                RaiseCommandState();
+        }
+    }
+
+    public string SkinStatus
+    {
+        get => _skinStatus;
+        set
+        {
+            if (SetField(ref _skinStatus, value))
+                OnPropertyChanged(nameof(SkinStatusVisibility));
+        }
+    }
+    public Visibility SkinStatusVisibility => string.IsNullOrWhiteSpace(SkinStatus) ? Visibility.Collapsed : Visibility.Visible;
+
+    public bool IsSlimSkin
+    {
+        get => _isSlimSkin;
+        set
+        {
+            if (SetField(ref _isSlimSkin, value))
+                OnPropertyChanged(nameof(SkinModelDescription));
+        }
+    }
+    public string SkinModelDescription => IsSlimSkin ? "Slim (Alex 3px arms)" : "Classic (Steve 4px arms)";
+
+    public string NewNickname
+    {
+        get => _newNickname;
+        set
+        {
+            if (SetField(ref _newNickname, value))
+                RaiseCommandState();
+        }
+    }
+
+    public string NicknameStatus
+    {
+        get => _nicknameStatus;
+        set
+        {
+            if (SetField(ref _nicknameStatus, value))
+                OnPropertyChanged(nameof(NicknameStatusVisibility));
+        }
+    }
+    public Visibility NicknameStatusVisibility => string.IsNullOrWhiteSpace(NicknameStatus) ? Visibility.Collapsed : Visibility.Visible;
+
+    public string SelectedAccountNote
+    {
+        get
+        {
+            if (SelectedAccount == null)
+                return "No account selected. Please choose an account to manage.";
+            if (SelectedAccount.Account.IsOffline)
+                return "Cracked (offline) account: nicknames can be updated instantly with automatic offline UUID derivation. Mojang skin upload requires an online Microsoft account.";
+            if (SelectedAccount.Account.HasRefresh)
+                return "Localts account: full access to Mojang API for skin uploads and nickname changes (with automatic session token refresh).";
+            return "Cookie / token account: access to Mojang API for skin uploads and nickname changes while the current session token remains active.";
+        }
+    }
 
     public bool IsNotBusy => !IsBusy;
     public bool CanUseAccount => !IsBusy && SelectedAccount != null;
@@ -209,6 +287,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public bool CanJoinSelectedServer => !IsBusy && SelectedServer != null;
     public bool CanDeleteServer => !IsBusy && SelectedServer != null;
     public bool HasServers => Servers.Count > 0;
+
+    public bool CanManageProfile => !IsBusy && SelectedAccount != null;
+    public bool CanApplySkin => !IsBusy && SelectedAccount != null && !string.IsNullOrWhiteSpace(SkinPath) && !SelectedAccount.Account.IsOffline;
+    public bool CanApplyNickname => !IsBusy && SelectedAccount != null && !string.IsNullOrWhiteSpace(NewNickname);
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -227,6 +309,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         SelectedAccount = Accounts.FirstOrDefault(a => a.Id == selectedId);
         OnPropertyChanged(nameof(HasAccounts));
+        OnPropertyChanged(nameof(SelectedAccountNote));
     }
 
     public void ReplaceServers(IEnumerable<SavedServer> servers, string? selectedId)
@@ -266,8 +349,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         CurrentUuid = "—";
         WorldStatus = "Unknown";
         IsCosmeticsUnlocked = false;
-        CosmeticsStatus = "Bridge disconnected";
-        CosmeticsDetails = "Connect to Lunar Client to view cosmetics unlock status.";
+        CosmeticsStatus = "Netty Transport Interception Active";
+        CosmeticsDetails = "Netty pipeline & WebSocket transport interception active: binary frames are intercepted and rewritten at transport layer to bypass obfuscation.";
         MarkCurrentAccount(null);
     }
 
@@ -287,6 +370,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanJoinDirect));
         OnPropertyChanged(nameof(CanJoinSelectedServer));
         OnPropertyChanged(nameof(CanDeleteServer));
+        OnPropertyChanged(nameof(CanManageProfile));
+        OnPropertyChanged(nameof(CanApplySkin));
+        OnPropertyChanged(nameof(CanApplyNickname));
     }
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)

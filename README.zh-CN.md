@@ -35,6 +35,9 @@ Localts 刷新令牌（`M.C…`）以及 Netscape 或 cookie 请求头格式的 
   使用底部工具栏切换账号、恢复 Lunar 启动时使用的账号，或删除已保存的凭据。
 - **Cosmetics（外观）** 解锁 Lunar Client 衣柜中的全部披风、翅膀、表情、徽章
   和饰件。会重新修补内存中的 RPC 桩，并管理本地装扮持久化。
+- **Account Settings（账号设置）** 提供所选账号的皮肤更换器与昵称修改功能。
+  可上传自定义 PNG 皮肤（经典 Classic 或纤细 Slim 模型）或重置为默认皮肤，并通过
+  Mojang 官方 API 更新游戏内名称（或为离线/盗版账号进行本地更名与 UUID 重新推导）。
 - **Servers（服务器）** 列出已保存的 Minecraft 服务器以及一个直连输入框。
   加入服务器使用 Minecraft 自带的连接流程，因此无需 Lunar 的 Microsoft
   账号菜单。已保存的服务器可以 ping 获取延迟、玩家数量和 MOTD。
@@ -174,6 +177,13 @@ Lunar Cookies 包含一个针对 Lunar Client 的内存内外观解锁器：
   `%APPDATA%\.minecraft\prometheus\saved\`，并在后续游戏启动时恢复。
 - **自动解锁**：可以从 **Cosmetics** 标签页手动触发，也可以通过 **Settings**
   设置为桥接连接或切换账号时自动解锁（默认关闭）。
+
+## 账号设置（皮肤更换与昵称修改）
+
+Lunar Cookies 在 **Account Settings（账号设置）** 标签页中提供账号管理功能：
+
+- **皮肤更换器**：选择并直接向 Mojang 上传自定义 `.png` 皮肤，支持选择模型样式（**Classic** 4px 粗臂或 **Slim** 3px 细臂），或一键重置为默认皮肤。
+- **昵称修改**：修改您的 Minecraft 游戏内名称。对于 Microsoft 账号，调用 Mojang 官方 API 更新 IGN（受 Mojang 30 天更名限制约束）；对于离线/盗版账号，立即更新本地配置并重新计算离线 UUID。若修改的账号当前正在 Minecraft 中运行，桥接会自动立即同步刷新当前会话。
 
 ## 兼容性设计
 

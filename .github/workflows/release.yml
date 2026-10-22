@@ -1,0 +1,134 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: 'Create as Draft Release'
+        type: boolean
+        default: true
+      prerelease:
+        description: 'Mark as Pre-release'
+        type: boolean
+        default: true
+      tag_name:
+        description: 'Custom Tag Name (leave empty to auto-generate timestamp tag)'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup Java JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Run automated test suite
+        run: dotnet run --project LunarCookies.Tests/LunarCookies.Tests.csproj --configuration Release
+
+      - name: Build Java bytecode helper and native switcher.dll
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force JavaHelper/out | Out-Null
+          Write-Host "[1/3] Compiling SessionSwitcher.java..."
+          & javac -source 1.8 -target 1.8 -d JavaHelper/out JavaHelper/SessionSwitcher.java
+          if ($LASTEXITCODE -ne 0) { throw "javac failed" }
+
+          Write-Host "[2/3] Embedding class bytes into C++ header..."
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Embed-ClassBytes.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Embed-ClassBytes failed" }
+
+          Write-Host "[3/3] Compiling switcher.dll with MinGW..."
+          $gpp = (Get-Command g++.exe -ErrorAction SilentlyContinue)?.Source
+          if (-not $gpp -and (Test-Path "C:\msys64\mingw64\bin\g++.exe")) {
+              $env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
+              $gpp = "C:\msys64\mingw64\bin\g++.exe"
+          }
+          if (-not $gpp) {
+              throw "g++ compiler not found in PATH or MSYS2"
+          }
+          Write-Host "Using MinGW compiler: $gpp"
+
+          & $gpp -m64 -std=c++17 -shared -O2 -fno-exceptions -fno-rtti `
+            -o Bridge/switcher.dll Bridge/bridge.cpp `
+            -I"$env:JAVA_HOME/include" -I"$env:JAVA_HOME/include/win32" -IBridge `
+            -lws2_32 -static-libgcc -static-libstdc++ -Wl,--kill-at
+          if ($LASTEXITCODE -ne 0) { throw "g++ compilation failed" }
+
+          Copy-Item Bridge/switcher.dll LunarCookies/switcher.dll -Force
+          Write-Host "Bridge/switcher.dll successfully built."
+
+      - name: Publish unpackaged self-contained WinUI 3 executable
+        shell: pwsh
+        run: |
+          dotnet publish LunarCookies/LunarCookies.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -o publish
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }
+
+          Copy-Item Bridge/switcher.dll publish/switcher.dll -Force
+          if (Test-Path "publish/LunarCookies.pdb") {
+              Remove-Item "publish/LunarCookies.pdb" -Force
+          }
+          Write-Host "Publish complete. Output folder contents:"
+          Get-ChildItem publish | Select-Object Name, Length
+
+      - name: Prepare release ZIP package
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag_name }}"
+          if (-not $tag) {
+              if ("${{ github.ref }}" -like "refs/tags/v*") {
+                  $tag = "${{ github.ref_name }}"
+              } else {
+                  $tag = "v2.4.0-" + (Get-Date -Format "yyyyMMdd-HHmm")
+              }
+          }
+          $zipName = "LunarCookies-$tag-win-x64.zip"
+          Write-Host "Packaging archive: $zipName"
+
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item publish/LunarCookies.exe package/
+          Copy-Item publish/switcher.dll package/
+          Copy-Item README.md package/ -ErrorAction SilentlyContinue
+          Copy-Item LICENSE package/ -ErrorAction SilentlyContinue
+
+          Compress-Archive -Path package/* -DestinationPath $zipName -Force
+
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_ZIP=$zipName" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_TAG }}
+          path: ${{ env.RELEASE_ZIP }}
+          retention-days: 14
+
+      - name: Publish Draft / Pre-release to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          files: ${{ env.RELEASE_ZIP }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: LunarCookies ${{ env.RELEASE_TAG }}
+          draft: ${{ github.event.inputs.draft != 'false' }}
+          prerelease: ${{ github.event.inputs.prerelease != 'false' }}
+          generate_release_notes: true

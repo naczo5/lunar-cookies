@@ -158,10 +158,12 @@ public sealed partial class MainWindow : Window
         bool accounts = tag == "accounts" || string.IsNullOrEmpty(tag);
         bool servers = tag == "servers";
         bool cosmetics = tag == "cosmetics";
+        bool accountSettings = tag == "accountSettings";
         bool injection = tag == "injection";
         AccountsPage.Visibility = accounts ? Visibility.Visible : Visibility.Collapsed;
         ServersPage.Visibility = servers ? Visibility.Visible : Visibility.Collapsed;
         CosmeticsPage.Visibility = cosmetics ? Visibility.Visible : Visibility.Collapsed;
+        AccountSettingsPage.Visibility = accountSettings ? Visibility.Visible : Visibility.Collapsed;
         InjectionPage.Visibility = injection ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility = tag == "settings" ? Visibility.Visible : Visibility.Collapsed;
 
@@ -1326,6 +1328,186 @@ public sealed partial class MainWindow : Window
             ShowNotice("Failed to open folder", ex.Message, InfoBarSeverity.Warning);
         }
     }
+
+    private async void BrowseSkin_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy)
+            return;
+
+        try
+        {
+            var picker = new FileOpenPicker
+            {
+                SuggestedStartLocation = PickerLocationId.PicturesLibrary,
+                ViewMode = PickerViewMode.Thumbnail
+            };
+            picker.FileTypeFilter.Add(".png");
+            picker.FileTypeFilter.Add("*");
+            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+
+            StorageFile? file = await picker.PickSingleFileAsync();
+            if (file != null)
+            {
+                ViewModel.SkinPath = file.Path;
+                ViewModel.SkinStatus = $"Selected: {file.Name}";
+            }
+        }
+        catch (Exception ex)
+        {
+            ViewModel.SkinStatus = $"File picker error: {ex.Message}";
+        }
+    }
+
+    private void SkinModelRadio_Checked(object sender, RoutedEventArgs e)
+    {
+        if (sender is RadioButton rb)
+        {
+            ViewModel.IsSlimSkin = rb == SlimModelRadio;
+        }
+    }
+
+    private async void UploadSkin_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy || ViewModel.SelectedAccount == null)
+            return;
+
+        string path = ViewModel.SkinPath?.Trim() ?? "";
+        if (string.IsNullOrEmpty(path))
+        {
+            ShowNotice("No skin selected", "Please browse for or enter a path to a .png skin file.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        if (!File.Exists(path))
+        {
+            ShowNotice("File not found", $"The file at \"{path}\" does not exist.", InfoBarSeverity.Error);
+            return;
+        }
+
+        StoredAccount account = ViewModel.SelectedAccount.Account;
+        if (account.IsOffline)
+        {
+            ShowNotice("Offline account", "Skin uploading via Mojang API is only available for online Microsoft accounts.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        string variant = ViewModel.IsSlimSkin ? "slim" : "classic";
+        await RunBusyAsync(async () =>
+        {
+            try
+            {
+                ViewModel.SkinStatus = "Uploading skin to Mojang...";
+                Log($"Uploading {variant} skin from \"{path}\" for account {account.Name}...");
+
+                byte[] bytes = await File.ReadAllBytesAsync(path, _lifetime.Token);
+                await ProfileManager.UploadSkinAsync(account, bytes, Path.GetFileName(path), variant, _store, _lifetime.Token);
+
+                ViewModel.SkinStatus = $"Skin ({variant} model) uploaded successfully!";
+                Log($"Successfully uploaded skin for {account.Name}.");
+                ShowNotice("Skin uploaded", $"Skin ({variant} model) uploaded to Mojang for {account.Name}.", InfoBarSeverity.Success);
+            }
+            catch (Exception ex)
+            {
+                ViewModel.SkinStatus = $"Skin upload failed: {ex.Message}";
+                Log($"Skin upload failed: {ex.Message}");
+                ShowNotice("Skin upload failed", ex.Message, InfoBarSeverity.Error);
+            }
+        });
+    }
+
+    private async void ResetSkin_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy || ViewModel.SelectedAccount == null)
+            return;
+
+        StoredAccount account = ViewModel.SelectedAccount.Account;
+        if (account.IsOffline)
+        {
+            ShowNotice("Offline account", "Skin reset via Mojang API is only available for online Microsoft accounts.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        await RunBusyAsync(async () =>
+        {
+            try
+            {
+                ViewModel.SkinStatus = "Resetting skin to default on Mojang...";
+                Log($"Resetting skin for account {account.Name}...");
+
+                await ProfileManager.ResetSkinAsync(account, _store, _lifetime.Token);
+
+                ViewModel.SkinStatus = "Skin reset to default successfully!";
+                Log($"Successfully reset skin for {account.Name}.");
+                ShowNotice("Skin reset", $"Skin reset to default for {account.Name}.", InfoBarSeverity.Success);
+            }
+            catch (Exception ex)
+            {
+                ViewModel.SkinStatus = $"Skin reset failed: {ex.Message}";
+                Log($"Skin reset failed: {ex.Message}");
+                ShowNotice("Skin reset failed", ex.Message, InfoBarSeverity.Error);
+            }
+        });
+    }
+
+    private async void ChangeNickname_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.IsBusy || ViewModel.SelectedAccount == null)
+            return;
+
+        string newName = ViewModel.NewNickname?.Trim() ?? "";
+        if (string.IsNullOrEmpty(newName))
+        {
+            ShowNotice("Username required", "Please enter a valid Minecraft username (3-16 characters).", InfoBarSeverity.Warning);
+            return;
+        }
+
+        StoredAccount account = ViewModel.SelectedAccount.Account;
+        string oldName = account.Name;
+
+        await RunBusyAsync(async () =>
+        {
+            try
+            {
+                ViewModel.NicknameStatus = account.IsOffline
+                    ? "Updating offline username..."
+                    : "Changing nickname with Mojang...";
+                Log($"Changing username from \"{oldName}\" to \"{newName}\" for {account.Source} account...");
+
+                await ProfileManager.ChangeNameAsync(account, newName, _store, _lifetime.Token);
+
+                ViewModel.NicknameStatus = $"Username successfully changed to {newName}!";
+                Log($"Username changed from {oldName} to {newName}.");
+                ShowNotice("Nickname changed", $"Username changed from {oldName} to {newName}.", InfoBarSeverity.Success);
+
+                ReloadAccounts(account.Id);
+
+                if (SameUuid(account.Uuid, _currentSessionUuid) && _injector.Bridge.IsConnected)
+                {
+                    try
+                    {
+                        var updated = await _injector.Bridge.SetSessionAsync(account.Name, account.Uuid, account.AccessToken, _lifetime.Token);
+                        if (updated != null && updated.Ok)
+                        {
+                            _currentSessionUuid = updated.Uuid;
+                            await RefreshSessionUiAsync();
+                        }
+                    }
+                    catch { /* best effort */ }
+                }
+            }
+            catch (Exception ex)
+            {
+                ViewModel.NicknameStatus = $"Name change failed: {ex.Message}";
+                Log($"Name change failed: {ex.Message}");
+                ShowNotice("Name change failed", ex.Message, InfoBarSeverity.Error);
+            }
+        });
+    }
+
+    private static bool SameUuid(string? left, string? right) =>
+        !string.IsNullOrWhiteSpace(left)
+        && !string.IsNullOrWhiteSpace(right)
+        && string.Equals(left.Replace("-", ""), right.Replace("-", ""), StringComparison.OrdinalIgnoreCase);
 
     private void SyncConnectionStatus()
     {

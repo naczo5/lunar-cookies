@@ -170,6 +170,66 @@ var tests = new (string Name, Action Run)[]
         }
         Assert(OfflineAccount.IsValidName("okname"));
         Assert(!OfflineAccount.IsValidName(null));
+    }),
+    ("ProfileManager offline nickname change and UUID recalculation", () =>
+    {
+        var store = new AccountStore();
+        var account = new StoredAccount
+        {
+            Name = "OldPlayer",
+            Uuid = OfflineAccount.ComputeOfflineUuid("OldPlayer").Replace("-", ""),
+            Source = OfflineAccount.SourceName
+        };
+
+        // Offline nickname update should work synchronously via ChangeNameAsync
+        ProfileManager.ChangeNameAsync(account, "NewPlayer", store).GetAwaiter().GetResult();
+        Assert(account.Name == "NewPlayer");
+        Assert(account.Uuid == OfflineAccount.ComputeOfflineUuid("NewPlayer").Replace("-", ""));
+
+        // Reject invalid name
+        AssertThrows<ArgumentException>(() =>
+            ProfileManager.ChangeNameAsync(account, "no", store).GetAwaiter().GetResult());
+
+        // Reject same name
+        AssertThrows<ArgumentException>(() =>
+            ProfileManager.ChangeNameAsync(account, "NewPlayer", store).GetAwaiter().GetResult());
+    }),
+    ("ProfileManager skin PNG validation", () =>
+    {
+        var store = new AccountStore();
+        var onlineAccount = new StoredAccount
+        {
+            Name = "OnlinePlayer",
+            Uuid = "12345678123456781234567812345678",
+            Source = "localts",
+            RefreshToken = "invalid_refresh"
+        };
+
+        // Empty bytes
+        AssertThrows<ArgumentException>(() =>
+            ProfileManager.UploadSkinAsync(onlineAccount, Array.Empty<byte>(), "skin.png", "classic", store).GetAwaiter().GetResult());
+
+        // Non-PNG bytes
+        byte[] fakeJpg = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46 };
+        AssertThrows<ArgumentException>(() =>
+            ProfileManager.UploadSkinAsync(onlineAccount, fakeJpg, "skin.png", "classic", store).GetAwaiter().GetResult());
+    }),
+    ("ProfileManager rejects skin upload for offline accounts", () =>
+    {
+        var store = new AccountStore();
+        var cracked = new StoredAccount
+        {
+            Name = "CrackedPlayer",
+            Uuid = OfflineAccount.ComputeOfflineUuid("CrackedPlayer").Replace("-", ""),
+            Source = OfflineAccount.SourceName
+        };
+
+        byte[] validPngHeader = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D };
+        AssertThrows<InvalidOperationException>(() =>
+            ProfileManager.UploadSkinAsync(cracked, validPngHeader, "skin.png", "classic", store).GetAwaiter().GetResult());
+
+        AssertThrows<InvalidOperationException>(() =>
+            ProfileManager.ResetSkinAsync(cracked, store).GetAwaiter().GetResult());
     })
 };
 

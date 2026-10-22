@@ -94,6 +94,11 @@
             <FontIcon Glyph="&#xE8EC;"/>
           </NavigationViewItem.Icon>
         </NavigationViewItem>
+        <NavigationViewItem Content="Account Settings" Tag="accountSettings">
+          <NavigationViewItem.Icon>
+            <FontIcon Glyph="&#xE77B;"/>
+          </NavigationViewItem.Icon>
+        </NavigationViewItem>
         <NavigationViewItem Content="Injection" Tag="injection">
           <NavigationViewItem.Icon>
             <FontIcon Glyph="&#xE90F;"/>
@@ -545,6 +550,10 @@
                            Foreground="{ThemeResource SecondaryTextBrush}"/>
               </StackPanel>
 
+              <InfoBar IsOpen="True" IsClosable="False" Severity="Informational"
+                       Title="Netty Transport Interception Active (Strategy 1 Implemented)"
+                       Message="Inbound WebSocket &amp; Netty binary frames are dynamically intercepted at the transport layer, rewriting Protobuf flags (has_all_cosmetics_flag) independently of obfuscated class and method names."/>
+
               <Border Padding="20" CornerRadius="10"
                       Background="{ThemeResource CardBackgroundBrush}"
                       BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
@@ -704,6 +713,185 @@
                   </StackPanel>
                 </Border>
               </Grid>
+
+              <!-- Breakage & Mitigation Proposal Card -->
+              <Border Padding="20" CornerRadius="10"
+                      Background="{ThemeResource CardBackgroundBrush}"
+                      BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+                <StackPanel Spacing="12">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE7BA;" FontSize="18" Foreground="#EAA300"/>
+                    <TextBlock Text="Why It Breaks &amp; Mitigation Proposal" FontSize="16" FontWeight="SemiBold"/>
+                  </StackPanel>
+                  <TextBlock Text="Recent Lunar Client releases alter websocket gRPC schemas and obfuscate service stub classes (e.g. migrating from com.lunarclient.websocket.cosmetic.v2 to newer protobuf models), causing direct bytecode patchers to fail."
+                             TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                  <TextBlock Text="Proposed Mitigations to Resolve This:" FontWeight="SemiBold" FontSize="13"/>
+                  <StackPanel Spacing="6" Margin="10,0,0,0">
+                    <TextBlock Text="1. Dynamic Protobuf Scanning: Instead of relying on static class/method names, scan loaded classes for types implementing RpcController and matching Protobuf descriptor signatures dynamically."
+                               TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                    <TextBlock Text="2. Netty Pipeline / WebSocket Interception (ACTIVE): Dynamically injects ChannelInboundHandler into Netty pipeline and wraps WebSocketListener. Intercepts binary frames at transport layer, bypassing class obfuscation."
+                               TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource BrandGreenBrush}" FontWeight="SemiBold"/>
+                    <TextBlock Text="3. Standalone Loopback Proxy: Run a local mock WebSocket proxy on 127.0.0.1 and redirect Lunar's websocket host via DNS/hosts to serve offline unlock payloads independently of game binary changes."
+                               TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource SecondaryTextBrush}"/>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+            </StackPanel>
+          </ScrollViewer>
+        </Grid>
+
+        <Grid x:Name="AccountSettingsPage" Margin="20,12,20,20" Visibility="Collapsed">
+          <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="16">
+              <StackPanel Spacing="3">
+                <TextBlock Text="Account Settings" Style="{StaticResource TitleTextBlockStyle}"/>
+                <TextBlock Text="Change skin or update in-game nickname for your accounts."
+                           Foreground="{ThemeResource SecondaryTextBrush}"/>
+              </StackPanel>
+
+              <!-- Account Selection Card -->
+              <Border Padding="20" CornerRadius="10"
+                      Background="{ThemeResource CardBackgroundBrush}"
+                      BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+                <StackPanel Spacing="12">
+                  <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Width="40" Height="40" CornerRadius="20"
+                            Background="{StaticResource BrandGreenBrush}">
+                      <FontIcon Glyph="&#xE77B;" FontSize="18" Foreground="White"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                      <TextBlock Text="Target Account" FontSize="16" FontWeight="SemiBold"/>
+                      <TextBlock Text="Choose which account to configure:"
+                                 Foreground="{ThemeResource SecondaryTextBrush}" FontSize="12"/>
+                    </StackPanel>
+                  </Grid>
+
+                  <ComboBox x:Name="SettingsAccountComboBox"
+                            HorizontalAlignment="Stretch"
+                            ItemsSource="{Binding Accounts}"
+                            SelectedItem="{Binding SelectedAccount, Mode=TwoWay}"
+                            DisplayMemberPath="Account.DisplayLabel"
+                            PlaceholderText="Select an account to manage..."/>
+
+                  <TextBlock Text="{Binding SelectedAccountNote}"
+                             TextWrapping="Wrap" FontSize="12"
+                             Foreground="{ThemeResource SecondaryTextBrush}"/>
+                </StackPanel>
+              </Border>
+
+              <!-- Skin Changer Card -->
+              <Border Padding="20" CornerRadius="10"
+                      Background="{ThemeResource CardBackgroundBrush}"
+                      BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+                <StackPanel Spacing="16">
+                  <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Width="40" Height="40" CornerRadius="20"
+                            Background="{StaticResource BrandGreenBrush}">
+                      <FontIcon Glyph="&#xE790;" FontSize="18" Foreground="White"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                      <TextBlock Text="Skin Changer" FontSize="16" FontWeight="SemiBold"/>
+                      <TextBlock Text="Upload a custom .png skin to Mojang or restore the default Steve/Alex skin."
+                                 Foreground="{ThemeResource SecondaryTextBrush}" FontSize="12"/>
+                    </StackPanel>
+                  </Grid>
+
+                  <Grid ColumnSpacing="10">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="SkinPathBox"
+                             Text="{Binding SkinPath, Mode=TwoWay}"
+                             PlaceholderText="Select or enter path to Minecraft skin (.png)..."
+                             VerticalAlignment="Center"/>
+                    <Button Grid.Column="1" Content="Browse..."
+                            Style="{StaticResource CardButtonStyle}"
+                            Click="BrowseSkin_Click"
+                            IsEnabled="{Binding CanManageProfile}"/>
+                  </Grid>
+
+                  <StackPanel Orientation="Horizontal" Spacing="20">
+                    <TextBlock Text="Model variant:" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                    <RadioButton x:Name="ClassicModelRadio" Content="Classic (Steve / 4px arms)"
+                                 IsChecked="True" GroupName="SkinModelGroup"
+                                 Checked="SkinModelRadio_Checked"/>
+                    <RadioButton x:Name="SlimModelRadio" Content="Slim (Alex / 3px arms)"
+                                 GroupName="SkinModelGroup"
+                                 Checked="SkinModelRadio_Checked"/>
+                  </StackPanel>
+
+                  <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button Content="Upload Skin"
+                            Style="{StaticResource AccentButtonStyle}"
+                            Click="UploadSkin_Click"
+                            IsEnabled="{Binding CanApplySkin}"/>
+                    <Button Content="Reset Skin"
+                            Style="{StaticResource CardButtonStyle}"
+                            Click="ResetSkin_Click"
+                            IsEnabled="{Binding CanManageProfile}"/>
+                  </StackPanel>
+
+                  <TextBlock Text="{Binding SkinStatus}"
+                             TextWrapping="Wrap" FontSize="12"
+                             Foreground="{ThemeResource SecondaryTextBrush}"
+                             Visibility="{Binding SkinStatusVisibility}"/>
+                </StackPanel>
+              </Border>
+
+              <!-- Nickname Changing Card -->
+              <Border Padding="20" CornerRadius="10"
+                      Background="{ThemeResource CardBackgroundBrush}"
+                      BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
+                <StackPanel Spacing="16">
+                  <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Width="40" Height="40" CornerRadius="20"
+                            Background="{StaticResource BrandGreenBrush}">
+                      <FontIcon Glyph="&#xE8D7;" FontSize="18" Foreground="White"
+                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                      <TextBlock Text="Nickname Changing" FontSize="16" FontWeight="SemiBold"/>
+                      <TextBlock Text="Change Minecraft username (Mojang API for Microsoft accounts, local rename + UUID recalculation for cracked)."
+                                 Foreground="{ThemeResource SecondaryTextBrush}" FontSize="12"/>
+                    </StackPanel>
+                  </Grid>
+
+                  <Grid ColumnSpacing="10">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*"/>
+                      <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="NewNicknameBox"
+                             Text="{Binding NewNickname, Mode=TwoWay}"
+                             PlaceholderText="Enter new username (3-16 characters)..."
+                             VerticalAlignment="Center"/>
+                    <Button Grid.Column="1" Content="Change Nickname"
+                            Style="{StaticResource AccentButtonStyle}"
+                            Click="ChangeNickname_Click"
+                            IsEnabled="{Binding CanApplyNickname}"/>
+                  </Grid>
+
+                  <TextBlock Text="{Binding NicknameStatus}"
+                             TextWrapping="Wrap" FontSize="12"
+                             Foreground="{ThemeResource SecondaryTextBrush}"
+                             Visibility="{Binding NicknameStatusVisibility}"/>
+                </StackPanel>
+              </Border>
             </StackPanel>
           </ScrollViewer>
         </Grid>

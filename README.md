@@ -38,6 +38,10 @@ bridge will not write to a guessed field.
 - **Cosmetics** unlocks all cloaks, wings, emotes, badges, and cosmetics in
   Lunar Client's wardrobe. Re-patches in-memory RPC stubs and manages local
   outfit persistence.
+- **Account Settings** provides an in-app skin changer and nickname editor for
+  the selected account. Uploads custom PNG skins (Classic or Slim model) or
+  resets skins back to default, and updates in-game names via official Mojang
+  APIs (or local rename with offline UUID recalculation for cracked accounts).
 - **Servers** lists saved Minecraft servers and a direct-connect field. Join
   uses Minecraft's own connect path, so Lunar's Microsoft-account menu is not
   required. Saved servers can be pinged for latency, player counts, and MOTD.
@@ -194,6 +198,13 @@ Lunar Cookies includes an in-memory cosmetic unlocker for Lunar Client:
 - **Auto-unlock**: Can be triggered manually from the **Cosmetics** tab or set
   to unlock automatically whenever the bridge connects or an account is switched
   via **Settings** (off by default).
+
+## Account settings (Skin Changer & Nickname)
+
+Lunar Cookies includes account management features directly in the **Account Settings** tab:
+
+- **Skin changer**: Select and upload custom `.png` skins directly to Mojang with model variant selection (**Classic** 4px arms or **Slim** 3px arms), or reset the skin back to default.
+- **Nickname changing**: Update your Minecraft in-game name. For Microsoft accounts, changes your Mojang IGN (subject to Mojang's 30-day cooldown). For cracked/offline accounts, renames the profile locally and recalculates the offline UUID instantly. If the modified account is currently active in Minecraft, the bridge updates the live session immediately.
 
 ## Compatibility design
 
