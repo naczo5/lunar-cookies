@@ -105,8 +105,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool _exitWhenMinecraftCloses = true;
     private bool _populateLunarAccountManager;
     private bool _isCosmeticsUnlocked;
-    private string _cosmeticsStatus = "Netty Transport Interception Active";
-    private string _cosmeticsDetails = "Netty pipeline & WebSocket transport interception active: binary frames are intercepted and rewritten at transport layer to bypass obfuscation.";
+    private string _cosmeticsStatus = "Ready to patch";
+    private string _cosmeticsDetails = "Unlock every cloak, wing, emote, badge, and spray on Lunar Client.";
     private bool _autoUnlockCosmetics;
 
     private string _skinPath = "";
@@ -208,7 +208,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public string CosmeticsStatus { get => _cosmeticsStatus; set => SetField(ref _cosmeticsStatus, value); }
     public string CosmeticsDetails { get => _cosmeticsDetails; set => SetField(ref _cosmeticsDetails, value); }
     public bool AutoUnlockCosmetics { get => _autoUnlockCosmetics; set => SetField(ref _autoUnlockCosmetics, value); }
-    public string CosmeticsBadgeText => IsCosmeticsUnlocked ? "Unlocked & Active" : "Transport Interceptor Active";
+    public string CosmeticsBadgeText => IsCosmeticsUnlocked ? "Unlocked & Active" : "Ready";
 
     public string SkinPath
     {
@@ -349,8 +349,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         CurrentUuid = "—";
         WorldStatus = "Unknown";
         IsCosmeticsUnlocked = false;
-        CosmeticsStatus = "Netty Transport Interception Active";
-        CosmeticsDetails = "Netty pipeline & WebSocket transport interception active: binary frames are intercepted and rewritten at transport layer to bypass obfuscation.";
+        CosmeticsStatus = "Ready to patch";
+        CosmeticsDetails = "Unlock every cloak, wing, emote, badge, and spray on Lunar Client.";
         MarkCurrentAccount(null);
     }
 

@@ -550,10 +550,6 @@
                            Foreground="{ThemeResource SecondaryTextBrush}"/>
               </StackPanel>
 
-              <InfoBar IsOpen="True" IsClosable="False" Severity="Informational"
-                       Title="Netty Transport Interception Active (Strategy 1 Implemented)"
-                       Message="Inbound WebSocket &amp; Netty binary frames are dynamically intercepted at the transport layer, rewriting Protobuf flags (has_all_cosmetics_flag) independently of obfuscated class and method names."/>
-
               <Border Padding="20" CornerRadius="10"
                       Background="{ThemeResource CardBackgroundBrush}"
                       BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
@@ -713,30 +709,7 @@
                   </StackPanel>
                 </Border>
               </Grid>
-
-              <!-- Breakage & Mitigation Proposal Card -->
-              <Border Padding="20" CornerRadius="10"
-                      Background="{ThemeResource CardBackgroundBrush}"
-                      BorderBrush="{ThemeResource CardBorderBrush}" BorderThickness="1">
-                <StackPanel Spacing="12">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE7BA;" FontSize="18" Foreground="#EAA300"/>
-                    <TextBlock Text="Why It Breaks &amp; Mitigation Proposal" FontSize="16" FontWeight="SemiBold"/>
-                  </StackPanel>
-                  <TextBlock Text="Recent Lunar Client releases alter websocket gRPC schemas and obfuscate service stub classes (e.g. migrating from com.lunarclient.websocket.cosmetic.v2 to newer protobuf models), causing direct bytecode patchers to fail."
-                             TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource SecondaryTextBrush}"/>
-                  <TextBlock Text="Proposed Mitigations to Resolve This:" FontWeight="SemiBold" FontSize="13"/>
-                  <StackPanel Spacing="6" Margin="10,0,0,0">
-                    <TextBlock Text="1. Dynamic Protobuf Scanning: Instead of relying on static class/method names, scan loaded classes for types implementing RpcController and matching Protobuf descriptor signatures dynamically."
-                               TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource SecondaryTextBrush}"/>
-                    <TextBlock Text="2. Netty Pipeline / WebSocket Interception (ACTIVE): Dynamically injects ChannelInboundHandler into Netty pipeline and wraps WebSocketListener. Intercepts binary frames at transport layer, bypassing class obfuscation."
-                               TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource BrandGreenBrush}" FontWeight="SemiBold"/>
-                    <TextBlock Text="3. Standalone Loopback Proxy: Run a local mock WebSocket proxy on 127.0.0.1 and redirect Lunar's websocket host via DNS/hosts to serve offline unlock payloads independently of game binary changes."
-                               TextWrapping="Wrap" FontSize="12" Foreground="{ThemeResource SecondaryTextBrush}"/>
-                  </StackPanel>
-                </StackPanel>
-              </Border>
-            </StackPanel>
+</StackPanel>
           </ScrollViewer>
         </Grid>
 
