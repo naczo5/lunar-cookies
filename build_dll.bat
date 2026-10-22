@@ -44,7 +44,7 @@ if errorlevel 1 (
 echo [3/3] Building switcher.dll ...
 "%GPP%" -m64 -std=c++17 -shared -O2 -fno-exceptions -fno-rtti -o "Bridge\switcher.dll" "Bridge\bridge.cpp" ^
   -I"%JAVA_HOME%\include" -I"%JAVA_HOME%\include\win32" -I"Bridge" ^
-  -lws2_32 -static-libgcc -static-libstdc++ -Wl,--kill-at
+  -static -static-libgcc -static-libstdc++ -lws2_32 -Wl,--kill-at
 if errorlevel 1 (
   echo g++ failed
   popd

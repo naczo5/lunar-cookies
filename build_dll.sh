@@ -29,7 +29,7 @@ fi
 x86_64-w64-mingw32-g++ -m64 -std=c++17 -shared -O2 -fno-exceptions -fno-rtti \
   -o Bridge/switcher.dll Bridge/bridge.cpp \
   -I"$JAVA_INC" -I"$JAVA_INC/linux" -IBridge \
-  -lws2_32 -static-libgcc -static-libstdc++ -Wl,--kill-at
+  -static -static-libgcc -static-libstdc++ -lws2_32 -Wl,--kill-at
 
 cp -f Bridge/switcher.dll LunarCookies/switcher.dll
 echo "Successfully built Bridge/switcher.dll and copied to LunarCookies/switcher.dll"
