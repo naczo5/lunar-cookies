@@ -45,50 +45,13 @@ jobs:
       - name: Run automated test suite
         run: dotnet run --project LunarCookies.Tests/LunarCookies.Tests.csproj --configuration Release
 
-      - name: Build Java bytecode helper and native switcher.dll
-        shell: pwsh
+      - name: Build switcher.dll and publish WinUI 3 executable
+        shell: cmd
         run: |
-          New-Item -ItemType Directory -Force JavaHelper/out | Out-Null
-          Write-Host "[1/3] Compiling SessionSwitcher.java..."
-          & javac -source 1.8 -target 1.8 -d JavaHelper/out JavaHelper/SessionSwitcher.java
-          if ($LASTEXITCODE -ne 0) { throw "javac failed" }
-
-          Write-Host "[2/3] Embedding class bytes into C++ header..."
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Embed-ClassBytes.ps1
-          if ($LASTEXITCODE -ne 0) { throw "Embed-ClassBytes failed" }
-
-          Write-Host "[3/3] Compiling switcher.dll with MinGW..."
-          $gpp = (Get-Command g++.exe -ErrorAction SilentlyContinue)?.Source
-          if (-not $gpp -and (Test-Path "C:\msys64\mingw64\bin\g++.exe")) {
-              $env:PATH = "C:\msys64\mingw64\bin;" + $env:PATH
-              $gpp = "C:\msys64\mingw64\bin\g++.exe"
-          }
-          if (-not $gpp) {
-              throw "g++ compiler not found in PATH or MSYS2"
-          }
-          Write-Host "Using MinGW compiler: $gpp"
-
-          & $gpp -m64 -std=c++17 -shared -O2 -fno-exceptions -fno-rtti `
-            -o Bridge/switcher.dll Bridge/bridge.cpp `
-            -I"$env:JAVA_HOME/include" -I"$env:JAVA_HOME/include/win32" -IBridge `
-            -lws2_32 -static-libgcc -static-libstdc++ -Wl,--kill-at
-          if ($LASTEXITCODE -ne 0) { throw "g++ compilation failed" }
-
-          Copy-Item Bridge/switcher.dll LunarCookies/switcher.dll -Force
-          Write-Host "Bridge/switcher.dll successfully built."
-
-      - name: Publish unpackaged self-contained WinUI 3 executable
-        shell: pwsh
-        run: |
-          dotnet publish LunarCookies/LunarCookies.csproj -c Release -r win-x64 --self-contained true -p:Platform=x64 -o publish
-          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }
-
-          Copy-Item Bridge/switcher.dll publish/switcher.dll -Force
-          if (Test-Path "publish/LunarCookies.pdb") {
-              Remove-Item "publish/LunarCookies.pdb" -Force
-          }
-          Write-Host "Publish complete. Output folder contents:"
-          Get-ChildItem publish | Select-Object Name, Length
+          call build_dll.bat
+          if errorlevel 1 exit /b 1
+          call build_exe.bat
+          if errorlevel 1 exit /b 1
 
       - name: Prepare release ZIP package
         shell: pwsh
